@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#113d40">
+  <title>Beach Buggy — Coast Club</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-state="loading">
+  <canvas id="glcanvas" tabindex="0" aria-label="Beach Buggy 3D racing game"></canvas>
+  <div class="vignette menu-only"></div>
+  <header>
+    <a class="brand" href="./" aria-label="Coast Club home"><span class="brand-mark">≈</span><span>COAST<br>CLUB<span class="brand-dot">®</span></span></a>
+    <div class="header-center menu-only"><span class="live-dot"></span> THE COAST IS YOURS <span class="slash">/</span> VOL. 01</div>
+    <button class="sound-button" id="sound-toggle" aria-label="Toggle sound" aria-pressed="true">◖ SOUND ON</button>
+  </header>
+  <main id="menu" class="menu-only">
+    <section class="hero">
+      <div class="eyebrow"><span class="small-line"></span> BEACH BUGGY RACING</div>
+      <h1>CHASE<br>THE <span>COAST.</span></h1>
+      <p>Salt in the air. Sand in the tires.<br>Find your line and leave the ordinary behind.</p>
+      <div class="hero-tags"><span>3 ISLAND TRACKS</span><span>4 DISTINCT RIDES</span><span>ENDLESS SUMMER</span></div>
+    </section>
+    <section class="garage" aria-label="Race setup">
+      <div class="panel-heading"><span class="eyebrow">YOUR NEXT ESCAPE</span><span class="panel-number">01 / 04</span></div>
+      <div class="vehicle-heading"><button id="previous-car" class="arrow" aria-label="Previous car">←</button><div><div id="car-tagline" class="eyebrow">THE ALL-ROUNDER</div><h2 id="car-name">Sunrunner</h2></div><button id="next-car" class="arrow" aria-label="Next car">→</button></div>
+      <div class="car-art" aria-hidden="true"><div class="car-shadow"></div><div class="tire rear-left"></div><div class="tire rear-right"></div><div class="tire front-left"></div><div class="tire front-right"></div><div class="buggy-body"><i class="hood"></i><i class="cockpit"></i><i class="rollbar"></i><i class="headlight one"></i><i class="headlight two"></i></div><span class="vehicle-label">COAST CUSTOMS / 001</span></div>
+      <div class="car-stats"><div><span>ACCELERATION</span><i><b id="stat-accel"></b></i></div><div><span>TOP SPEED</span><i><b id="stat-speed"></b></i></div><div><span>HANDLING</span><i><b id="stat-grip"></b></i></div></div>
+      <label class="field-label" for="mode">MAKE IT A</label>
+      <select id="mode"><option value="0">Quick race · 5 rivals / 3 laps</option><option value="1">Time trial · 3 solo laps</option></select>
+      <fieldset><legend>DRIVING FEEL</legend><div class="segments" id="physics"><button data-physics="0">Arcade</button><button data-physics="1">Balanced</button><button data-physics="2">Realistic</button></div></fieldset>
+      <p class="physics-note" id="physics-note">More grip. More confidence. Full send.</p>
+      <button id="start" class="start" disabled><span id="start-label">WARMING UP…</span><span>↗</span></button>
+      <div class="garage-bottom"><span class="live-dot"></span><span id="input-status">KEYBOARD READY</span><span>NO TICKET NEEDED</span></div>
+    </section>
+    <section class="tracks" aria-label="Choose track">
+      <div class="track-heading"><span class="eyebrow">PICK YOUR PATCH OF PARADISE</span><span>01 — 03</span></div>
+      <div class="track-list">
+        <button class="track-card selected" data-track="0"><span class="track-thumb beach"><svg viewBox="0 0 100 70"><path d="M48 10 C74 5 90 30 75 48 S29 66 17 46 S17 14 48 10Z"/></svg><span>01</span></span><span class="track-copy"><b>Beach Loop</b><small>WIDE TURNS / SAND</small></span><span class="track-check">↗</span></button>
+        <button class="track-card" data-track="1"><span class="track-thumb rocky"><svg viewBox="0 0 100 70"><path d="M40 9 C69 4 89 19 66 31 S93 47 66 59 S29 53 18 38 S39 30 21 17Z"/></svg><span>02</span></span><span class="track-copy"><b>Rocky Coast</b><small>CLIFFS / ELEVATION</small></span><span class="track-check">↗</span></button>
+        <button class="track-card" data-track="2"><span class="track-thumb lagoon"><svg viewBox="0 0 100 70"><path d="M39 9 C74 5 91 25 62 31 S91 48 62 59 S18 53 18 39 S44 29 24 17Z"/></svg><span>03</span></span><span class="track-copy"><b>Lagoon Run</b><small>BRIDGES / JUMPS</small></span><span class="track-check">↗</span></button>
+      </div>
+    </section>
+  </main>
+  <footer class="menu-only"><span>A LITTLE DIRT LOOKS GOOD ON YOU.</span><span>RUST + WEBASSEMBLY <i>✦</i> MADE FOR THE LONG WAY HOME</span></footer>
+  <section id="hud" aria-label="Race status" hidden>
+    <div class="race-top"><div class="race-name"><span class="eyebrow" id="race-mode">QUICK RACE</span><strong id="race-track">Beach Loop</strong><small id="race-feel">ARCADE</small></div><div class="race-metrics"><div><span>POSITION</span><strong><b id="position">1</b><small id="field-size">/ 6</small></strong></div><div><span>LAP</span><strong><b id="lap">1</b><small>/ 3</small></strong></div><div class="time-metric"><span id="timer-label">RACE TIME</span><strong id="timer">00:00.00</strong><small>BEST LAP <b id="best">—</b></small></div></div><button class="pause-button" id="pause" aria-label="Pause race">Ⅱ</button></div>
+    <div class="speedometer"><span id="speed">0</span><small>KM/H</small><div class="speed-track"><i id="speed-bar"></i></div><b id="surface-label">FIND YOUR FLOW</b></div>
+    <div class="driving-help"><span><kbd>W A S D</kbd> DRIVE</span><span><kbd>SPACE</kbd> HANDBRAKE</span><span><kbd>R</kbd> RESET</span><span><kbd>ESC</kbd> PAUSE</span></div>
+    <div id="countdown" aria-live="polite"></div>
+  </section>
+  <div id="modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title"><span class="eyebrow" id="modal-eyebrow">TAKE A BREATHER</span><h2 id="modal-title">Coast is clear.</h2><p id="modal-description">Your next corner can wait.</p><div id="results" hidden><div><span>FINISH</span><b id="result-position"></b></div><div><span>TOTAL TIME</span><b id="result-time"></b></div><div><span>BEST LAP</span><b id="result-best"></b></div></div><label class="volume-control">SOUND LEVEL <input id="volume" type="range" min="0" max="100" value="55" aria-label="Sound volume"></label><button id="resume" class="start"><span>BACK TO THE COAST</span><span>↗</span></button><button id="restart" class="secondary">Race again</button><button id="back-menu" class="text-button">Back to garage</button></section></div>
+  <div id="loading"><span class="loader-ring"></span><b>UNPACKING SUMMER</b><p>Loading the island…</p></div>
+  <script src="gl.js"></script><script src="bridge.js"></script>
+</body>
+</html>
