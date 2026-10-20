@@ -30,6 +30,7 @@
       <select id="mode"><option value="0">Quick race · 5 rivals / 3 laps</option><option value="1">Time trial · 3 solo laps</option></select>
       <fieldset><legend>DRIVING FEEL</legend><div class="segments" id="physics"><button data-physics="0">Arcade</button><button data-physics="1">Balanced</button><button data-physics="2">Realistic</button></div></fieldset>
       <p class="physics-note" id="physics-note">More grip. More confidence. Full send.</p>
+      <details class="setup-options"><summary id="setup-summary">Normal rivals · High detail</summary><div class="option-grid"><label>RIVALS<select id="difficulty" data-option="6" aria-label="Opponent difficulty"><option value="0">Easy</option><option value="1">Normal</option><option value="2">Hard</option></select></label><label>SCENERY<select id="quality" data-option="7" aria-label="Graphics quality"><option value="0">Low detail</option><option value="1">High detail</option></select></label></div><label class="motion-option"><input id="reduced-motion" data-motion type="checkbox"> Reduce camera motion</label></details>
       <button id="start" class="start" disabled><span id="start-label">WARMING UP…</span><span>↗</span></button>
       <div class="garage-bottom"><span class="live-dot"></span><span id="input-status">KEYBOARD READY</span><span>NO TICKET NEEDED</span></div>
     </section>
@@ -48,8 +49,18 @@
     <div class="speedometer"><span id="speed">0</span><small>KM/H</small><div class="speed-track"><i id="speed-bar"></i></div><b id="surface-label">FIND YOUR FLOW</b></div>
     <div class="driving-help"><span><kbd>W A S D</kbd> DRIVE</span><span><kbd>SPACE</kbd> HANDBRAKE</span><span><kbd>R</kbd> RESET</span><span><kbd>ESC</kbd> PAUSE</span></div>
     <div id="countdown" aria-live="polite"></div>
+    <div id="player-badge" class="player-badge" hidden><span>YOU</span><strong id="player-car">Sunrunner</strong><small>FOLLOW YOUR HALO</small></div>
+    <div id="race-announcement" role="status" aria-live="polite" hidden></div>
   </section>
-  <div id="modal" hidden><section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title"><span class="eyebrow" id="modal-eyebrow">TAKE A BREATHER</span><h2 id="modal-title">Coast is clear.</h2><p id="modal-description">Your next corner can wait.</p><div id="results" hidden><div><span>FINISH</span><b id="result-position"></b></div><div><span>TOTAL TIME</span><b id="result-time"></b></div><div><span>BEST LAP</span><b id="result-best"></b></div></div><label class="volume-control">SOUND LEVEL <input id="volume" type="range" min="0" max="100" value="55" aria-label="Sound volume"></label><button id="resume" class="start"><span>BACK TO THE COAST</span><span>↗</span></button><button id="restart" class="secondary">Race again</button><button id="back-menu" class="text-button">Back to garage</button></section></div>
+  <div id="modal" hidden>
+    <div class="finish-celebration" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <span class="eyebrow" id="modal-eyebrow">TAKE A BREATHER</span><h2 id="modal-title">Coast is clear.</h2><p id="modal-description">Your next corner can wait.</p>
+      <div id="results" hidden><div><span>FINISH</span><b id="result-position"></b></div><div><span>TOTAL TIME</span><b id="result-time"></b></div><div><span>BEST LAP</span><b id="result-best"></b></div><p id="personal-best" role="status" hidden></p></div>
+      <div class="pause-options" id="pause-options"><div class="option-grid"><label>RIVALS · NEXT RACE<select id="pause-difficulty" data-option="6" aria-label="Opponent difficulty for next race"><option value="0">Easy</option><option value="1">Normal</option><option value="2">Hard</option></select></label><label>SCENERY<select id="pause-quality" data-option="7" aria-label="Graphics quality during race"><option value="0">Low detail</option><option value="1">High detail</option></select></label></div><label class="motion-option"><input id="pause-reduced-motion" data-motion type="checkbox"> Reduce camera motion</label></div>
+      <label class="volume-control">SOUND LEVEL <input id="volume" type="range" min="0" max="100" value="55" aria-label="Sound volume"></label><button id="resume" class="start"><span>BACK TO THE COAST</span><span>↗</span></button><button id="restart" class="secondary">Race again</button><button id="back-menu" class="text-button">Back to garage</button>
+    </section>
+  </div>
   <div id="loading"><span class="loader-ring"></span><b>UNPACKING SUMMER</b><p>Loading the island…</p></div>
   <script src="gl.js"></script><script src="bridge.js"></script>
 </body>

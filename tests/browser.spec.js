@@ -20,6 +20,10 @@ test('garage, settings persistence, keyboard, sound, pause, reset, restart',asyn
   await page.locator('[data-track="1"]').click();
   await page.locator('#next-car').click();
   await page.locator('[data-physics="2"]').click();
+  await page.locator('.setup-options summary').click();
+  await page.locator('#difficulty').selectOption('2');
+  await page.locator('#quality').selectOption('0');
+  await page.locator('#reduced-motion').check();
   await page.locator('#mode').selectOption('1');
   await page.reload();
   await expect(page.locator('#start')).toBeEnabled();
@@ -27,7 +31,12 @@ test('garage, settings persistence, keyboard, sound, pause, reset, restart',asyn
   await expect(page.locator('[data-track="1"]')).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('[data-physics="2"]')).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('#mode')).toHaveValue('1');
+  await expect(page.locator('#setup-summary')).toHaveText('Solo laps · Low detail');
+  expect(await page.evaluate(()=>[6,7,8].map(i=>importObject.env.bb_option(i)))).toEqual([2,0,1]);
+  await expect(page.locator('body')).toHaveAttribute('data-reduced-motion','true');
   await start(page);
+  await expect(page.locator('#player-badge')).toBeVisible();
+  await expect(page.locator('#player-car')).toHaveText('Sand Flea');
   const hasAudioOutput=await page.evaluate(async()=>{
     try {return (await navigator.mediaDevices.enumerateDevices()).some(d=>d.kind==='audiooutput');} catch {return true;}
   });
@@ -38,6 +47,7 @@ test('garage, settings persistence, keyboard, sound, pause, reset, restart',asyn
   await expect.poll(()=>page.evaluate(()=>coast.telemetry.countdown)).toBeLessThanOrEqual(0);
   await page.keyboard.down('w');
   await expect.poll(()=>page.evaluate(()=>coast.telemetry.speed)).toBeGreaterThan(12);
+  await expect.poll(()=>page.evaluate(()=>coast.telemetry.throttle)).toBeGreaterThan(0.9);
   await page.keyboard.down('d');await page.waitForTimeout(350);await page.keyboard.up('d');
   await page.keyboard.up('w');
   await page.screenshot({path:info.outputPath('race.png')});
@@ -47,6 +57,11 @@ test('garage, settings persistence, keyboard, sound, pause, reset, restart',asyn
   await page.waitForTimeout(300);
   expect(await page.evaluate(()=>coast.telemetry.elapsed)).toBe(elapsed);
   await page.locator('#volume').fill('30');
+  await expect(page.locator('#pause-difficulty')).toHaveValue('2');
+  await expect(page.locator('#pause-difficulty')).toBeDisabled();
+  await page.locator('#pause-quality').selectOption('1');
+  await page.locator('#pause-reduced-motion').uncheck();
+  expect(await page.evaluate(()=>[7,8].map(i=>importObject.env.bb_option(i)))).toEqual([1,0]);
   await page.locator('#resume').click();
   await expect(page.locator('body')).toHaveAttribute('data-state','race');
   await page.keyboard.press('r');
@@ -55,6 +70,8 @@ test('garage, settings persistence, keyboard, sound, pause, reset, restart',asyn
   await expect.poll(()=>page.evaluate(()=>coast.telemetry.elapsed)).toBe(0);
   await page.keyboard.press('Escape');await page.locator('#back-menu').click();
   await expect(page.locator('body')).toHaveAttribute('data-state','menu');
+  const saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('coast-v1:settings')));
+  expect(saved).toMatchObject({difficulty:2,quality:1,reducedMotion:false,volume:0.3});
   expect(errors).toEqual([]);
 });
 
@@ -88,7 +105,119 @@ for(const trial of [false,true])test(`${trial?'time trial':'AI race'} finishes w
   expect(await page.evaluate(()=>coast.telemetry.best)).toBeGreaterThan(10);
   expect(await page.evaluate(()=>Object.keys(localStorage).filter(k=>/^coast-v1:\d+$/.test(k)))).toEqual([]);
   await expect(page.locator('#result-time')).not.toHaveText('—');
+  await expect(page.locator('#personal-best')).toBeHidden();
+  await expect(page.locator('#modal-description')).toContainText('Personal records unchanged');
   await page.screenshot({path:info.outputPath('results.png')});
+  expect(errors).toEqual([]);
+});
+
+test('legacy saves retain choices and records; new settings default safely',async({page})=>{
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.addInitScript(()=>{
+    localStorage.setItem('coast-v1:settings',JSON.stringify({track:0,car:0,physics:0,mode:0,volume:0.3,muted:true}));
+    localStorage.setItem('coast-v1:100','45.5');
+  });
+  const errors=await ready(page);
+  expect(await page.evaluate(()=>[6,7,8].map(i=>importObject.env.bb_option(i)))).toEqual([1,1,1]);
+  await expect(page.locator('body')).toHaveAttribute('data-reduced-motion','true');
+  await expect(page.locator('#sound-toggle')).toHaveAttribute('aria-pressed','false');
+  await start(page);await expect.poll(()=>page.evaluate(()=>coast.telemetry.best)).toBe(45.5);
+  expect(await page.evaluate(()=>localStorage.getItem('coast-v1:100'))).toBe('45.5');
+  expect(errors).toEqual([]);
+});
+
+// Exercise browser presentation at exact race milestones without waiting three laps.
+async function presentationReady(page,url='/') {
+  await page.route('**/gl.js',route=>route.fulfill({contentType:'application/javascript',body:`
+    window.importObject={env:{}};
+    window.miniquad_add_plugin=plugin=>plugin.register_plugin(importObject);
+    window.load=()=>{importObject.env.bb_event(9,0);importObject.env.bb_telemetry(0,0,1,1,0,-1,3,0,0,0,1);};
+  `}));
+  return ready(page,url);
+}
+const sample=(overrides={})=>({state:1,speed:45,lap:1,position:2,elapsed:5,best:40,countdown:-1,finish:0,slip:0,impact:0,grounded:1,throttle:0.8,load:0.7,surface:0,landing:0,pbDelta:0,newBest:0,...overrides});
+async function telemetry(page,overrides={}) {
+  await page.waitForTimeout(70);
+  await page.evaluate(data=>importObject.env.bb_telemetry(...Object.values(data)),sample(overrides));
+}
+
+test('lap cues, landing status, record improvement, and reduced-motion finish',async({page})=>{
+  const errors=await presentationReady(page);
+  await telemetry(page,{countdown:3,elapsed:0});
+  await expect(page.locator('#player-badge')).toBeVisible();
+  await telemetry(page,{lap:2});
+  await expect(page.locator('#race-announcement')).toHaveText('LAP 2 · FIND YOUR FLOW');
+  await expect(page.locator('#player-badge')).toBeHidden();
+  await telemetry(page,{lap:3,landing:0.7});
+  await expect(page.locator('#race-announcement')).toHaveText('FINAL LAP · MAKE IT COUNT');
+  await expect(page.locator('#surface-label')).toHaveText('STUCK THE LANDING');
+  await page.waitForTimeout(2250);
+  await expect(page.locator('#race-announcement')).toBeHidden();
+  await telemetry(page,{state:3,lap:3,finish:115,best:38,pbDelta:2.25,newBest:1});
+  await expect(page.locator('#personal-best')).toHaveText('PERSONAL BEST · 2.25s faster');
+  await expect(page.locator('.finish-celebration')).toBeVisible();
+  await telemetry(page,{state:2});
+  await page.locator('#pause-reduced-motion').check();
+  await telemetry(page,{state:3,lap:3,finish:115,best:38,newBest:1});
+  await expect(page.locator('#personal-best')).toContainText('FIRST LAP RECORD');
+  await expect(page.locator('.finish-celebration')).toBeHidden();
+  expect(await page.locator('#race-announcement').evaluate(el=>getComputedStyle(el).animationName)).toBe('none');
+  expect(errors).toEqual([]);
+});
+
+test('demo presentation suppresses record claims even if telemetry reports a record',async({page})=>{
+  await presentationReady(page,'/?autodrive=1');
+  await telemetry(page,{state:3,finish:115,pbDelta:2,newBest:1});
+  await expect(page.locator('#personal-best')).toBeHidden();
+  await expect(page.locator('#modal-eyebrow')).not.toContainText('PERSONAL BEST');
+});
+
+test('audio waits for interaction, responds to load and surfaces, and bounds effects',async({page})=>{
+  await page.addInitScript(()=>{
+    window.audioNodes=[];
+    const parameter=()=>({value:0,setTargetAtTime(value){this.value=value;},setValueAtTime(value){this.value=value;},exponentialRampToValueAtTime(value){this.end=value;}});
+    class AudioMock {
+      constructor(){this.currentTime=0;this.sampleRate=8000;this.state='suspended';this.destination={};}
+      resume(){this.state='running';return Promise.resolve();}
+      node(kind){const node={kind,connect(){},disconnect(){},start(){},stop(){},gain:parameter(),frequency:parameter(),Q:parameter()};audioNodes.push(node);return node;}
+      createGain(){return this.node('gain');}createBiquadFilter(){return this.node('filter');}createOscillator(){return this.node('oscillator');}createBufferSource(){return this.node('source');}
+      createBuffer(channels,size){return {getChannelData:()=>new Float32Array(size)};}
+    }
+    window.AudioContext=AudioMock;
+  });
+  const errors=await presentationReady(page);
+  expect(await page.evaluate(()=>coast.audioState)).toBe('uninitialized');
+  await page.locator('#start').click();
+  expect(await page.evaluate(()=>coast.audioState)).toBe('running');
+  await telemetry(page,{throttle:0,load:0});
+  const coastRev=await page.evaluate(()=>audioNodes.find(n=>n.kind==='oscillator').frequency.value);
+  await telemetry(page,{throttle:1,load:1});
+  const powerRev=await page.evaluate(()=>audioNodes.find(n=>n.kind==='oscillator').frequency.value);
+  expect(powerRev).toBeGreaterThan(coastRev);
+  await telemetry(page,{throttle:1,load:1,grounded:0});
+  expect(await page.evaluate(()=>audioNodes.find(n=>n.kind==='oscillator').frequency.value)).toBeGreaterThan(powerRev);
+  expect(await page.evaluate(()=>audioNodes.filter(n=>n.kind==='gain')[2].gain.value)).toBe(0);
+  await telemetry(page,{surface:1,slip:1});
+  const rockHz=await page.evaluate(()=>audioNodes.filter(n=>n.kind==='filter')[1].frequency.value);
+  await telemetry(page,{surface:2,slip:1});
+  expect(await page.evaluate(()=>audioNodes.filter(n=>n.kind==='filter')[1].frequency.value)).toBeLessThan(rockHz);
+  const before=await page.evaluate(()=>audioNodes.length);
+  const oscillatorsBefore=await page.evaluate(()=>audioNodes.filter(n=>n.kind==='oscillator').length);
+  const sourcesBefore=await page.evaluate(()=>audioNodes.filter(n=>n.kind==='source').length);
+  await telemetry(page,{landing:1,impact:1,speed:500,slip:500,throttle:500,load:500});
+  const after=await page.evaluate(()=>audioNodes.length);
+  expect(after).toBeGreaterThan(before);
+  expect(await page.evaluate(()=>audioNodes.filter(n=>n.kind==='oscillator').length)).toBe(oscillatorsBefore+1);
+  expect(await page.evaluate(()=>audioNodes.filter(n=>n.kind==='source').length)).toBe(sourcesBefore+1);
+  await telemetry(page,{landing:0.8,impact:0.8});
+  expect(await page.evaluate(()=>audioNodes.length)).toBe(after);
+  await telemetry(page,{landing:0,impact:0});
+  await telemetry(page,{landing:0,impact:0.8});
+  expect(await page.evaluate(()=>audioNodes.filter(n=>n.kind==='oscillator').length)).toBe(oscillatorsBefore+2);
+  expect(await page.evaluate(()=>audioNodes.filter(n=>n.kind==='source').length)).toBe(sourcesBefore+1);
+  expect(await page.evaluate(()=>audioNodes.filter(n=>n.kind==='gain').every(n=>Number.isFinite(n.gain.value)&&n.gain.value>=0&&n.gain.value<=0.35))).toBe(true);
+  await telemetry(page,{state:2});
+  expect(await page.evaluate(()=>audioNodes.filter(n=>n.kind==='gain').slice(1,3).map(n=>n.gain.value))).toEqual([0,0]);
   expect(errors).toEqual([]);
 });
 

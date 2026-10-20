@@ -1,6 +1,6 @@
 # Beach Buggy · Coast Club
 
-A top-down 3D island racer written in Rust and compiled to WebAssembly. Three tracks, four cars, three physics presets, five AI rivals, solo time trials, and synthesized sound. Everything is unlocked.
+A top-down 3D island racer written in Rust and compiled to WebAssembly. Three tracks, four cars, three physics presets, five AI rivals, solo time trials, and synthesized sound. Everything is unlocked. Beach Loop is the coastal showcase, with sculpted shores, shallow water, beach landmarks, and a marked jump; all tracks share the closer camera, visible player marker, and reactive driving effects.
 
 ## Run locally
 
@@ -14,7 +14,7 @@ npm run build
 npm run dev
 ```
 
-Open **http://localhost:4173**. Choose a track, car, driving feel, and mode; click **LET’S RIDE**. `npm run dev` serves the latest build; rebuild after source changes. Change the local port with `PORT=8080 npm run dev`.
+Open **http://localhost:4173**. Choose a track, car, driving feel, mode, and rival difficulty; click **LET’S RIDE**. `npm run dev` serves the latest build; rebuild after source changes. Change the local port with `PORT=8080 npm run dev`.
 
 `npm run setup` installs Rust automatically on Linux x64. On other platforms, install [rustup](https://rustup.rs/) first, then run the same command. Build scripts locate Cargo in `~/.cargo/bin`; for direct Cargo commands, add that directory to your PATH. Native Rust is used for simulation tests; the playable interface targets the browser.
 
@@ -43,7 +43,13 @@ Use mouse or keyboard Tab/Enter for garage and pause menus. Connect a standard-m
 
 **Quick Race** is three laps against five AI drivers. **Time Trial** is three solo laps, displaying the current lap timer. Gates must be crossed in order and in the forward direction. The minimap shows every car. Reset preserves elapsed time and checkpoint order; pause stops the simulation clock.
 
+**Easy / Normal / Hard** changes rival pace independently of driving feel. Normal is the default. Rivals brake for occupied lanes and hold a passing line before merging back; they use the same vehicle physics and no rubber-banding. A difficulty change during a race takes effect on the next start or restart.
+
+**High / Low quality** controls decorative detail and effect budgets without changing physics. **Reduced motion** follows the system preference on first use, can be overridden, and removes camera shake, speed-driven zoom, and celebratory motion. Quality and reduced motion apply immediately. All settings persist when browser storage is available.
+
 Best completed laps are saved by track/car/physics combination in the browser's local storage and shared across both modes. Settings persist too. No account or server is required; private mode or blocked storage still permits play without saving. Clearing site data clears records.
+
+Results highlight a new personal best and the improvement over the record held when the race started. Existing records remain compatible: the showcase update preserves the drivable layout, checkpoints, vehicle handling, and record keys.
 
 ## Development and validation
 
@@ -63,7 +69,7 @@ xvfb-run -a npm run test:firefox -- --headed
 
 Firefox's headless WebGL support depends on the host drivers; Xvfb provides the display used in validation. On hosts without an audio output device, the Firefox test verifies graph initialization and graceful operation rather than audible output. Chromium tests require a running audio context. Browser tests emulate a standard controller; physical controller hardware still benefits from a local check.
 
-Rust tests cover all **36 track/car/preset combinations**, nine complete six-car grid combinations, ordered and directional checkpoints, out-of-bounds gate rejection, lap/finish/standings rules, record keys, acceleration, steering profiles, braking/reverse, tire slip/handbrake, suspension launch/landing, collision momentum, resets, and render-rate independence. Browser tests cover garage persistence, keyboard/gamepad input, disconnect fallback, sound initialization, pause/reset/restart, complete races and trials, storage errors, and 1080p captures.
+The 19 Rust tests cover all **36 track/car/preset combinations**, **108 complete six-car grids** across rival difficulties, 27 stationary-start avoidance configurations, blocked passing, side-by-side racing, difficulty/handling isolation, feedback/reset state, ordered and directional checkpoints, out-of-bounds gate rejection, lap/finish/standings rules, record keys, acceleration, steering profiles, braking/reverse, tire slip/handbrake, suspension launch/landing, collision momentum, and render-rate independence. The 10 browser tests per browser cover garage persistence, legacy saves, quality/reduced-motion settings, keyboard/gamepad input, disconnect fallback, sound initialization, pause/reset/restart, complete races and trials, storage errors, and 1080p captures. Isolated presentation tests inject telemetry to check lap/landing/PB messages and audio gains; actual race completion uses the simulation.
 
 `?autodrive=1` enables an accelerated demo driver for browser race-completion tests. It drives through the same simulation and checkpoints and **never saves personal records**. It is intentionally absent from the regular UI.
 
@@ -72,7 +78,7 @@ Playwright writes screenshots, traces, and render samples under `test-results/`.
 ## Code layout
 
 - `src/sim.rs`: Dependency-free simulation logic, vehicle/track data, AI, collisions, checkpoints, race timing, and tests. Fixed 60 Hz stepping with accumulated render time.
-- `src/main.rs`, `src/render.rs`: Macroquad game loop, interpolated positions/headings/heights, fixed-angle following camera, cached procedural geometry, animated cars, particles, and minimap.
+- `src/main.rs`, `src/render.rs`: Macroquad game loop, interpolated positions/headings/heights, fixed-angle following camera with bounded look-ahead, cached scenery/car geometry, reusable mesh buffers, batched effects, and minimap. Particle budgets are 384 on High and 160 on Low.
 - `src/bridge.rs`, `web/bridge.js`: Typed numeric WASM imports for controller input, browser audio, telemetry, and storage. HTML/CSS provide accessible garage, HUD, and pause/results controls.
 - `scripts/`: Toolchain setup, locked release build, local static server, and verification.
 

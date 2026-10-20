@@ -297,6 +297,7 @@ pub struct Car {
     pub previous_heading: f32,
     pub yaw: f32,
     pub height: f32,
+    pub ground_height: f32,
     pub previous_height: f32,
     pub vertical: f32,
     pub pitch: f32,
@@ -304,6 +305,10 @@ pub struct Car {
     pub steer: f32,
     pub slip: f32,
     pub impact: f32,
+    pub throttle: f32,
+    pub load: f32,
+    pub landing: f32,
+    pub surface: usize,
     pub grounded: bool,
     pub next_cp: usize,
     pub laps: u32,
@@ -329,6 +334,7 @@ impl Car {
             previous_heading: t.y.atan2(t.x),
             yaw: 0.,
             height: h,
+            ground_height: h,
             previous_height: h,
             vertical: 0.,
             pitch: 0.,
@@ -336,6 +342,10 @@ impl Car {
             steer: 0.,
             slip: 0.,
             impact: 0.,
+            throttle: 0.,
+            load: 0.,
+            landing: 0.,
+            surface: surface_at(track, track.nearest(pos)),
             grounded: true,
             next_cp: 1,
             laps: 0,
@@ -357,11 +367,19 @@ impl Car {
         self.yaw = 0.;
         self.vertical = 0.;
         self.height = track.ground(track.nearest(self.pos));
+        self.ground_height = self.height;
         self.previous_height = self.height;
         self.grounded = true;
         self.stuck = 0.;
         self.pitch = 0.;
         self.roll = 0.;
+        self.steer = 0.;
+        self.slip = 0.;
+        self.impact = 0.;
+        self.throttle = 0.;
+        self.load = 0.;
+        self.landing = 0.;
+        self.surface = surface_at(track, track.nearest(self.pos));
     }
     pub fn forward(&self) -> V2 {
         V2::new(self.heading.cos(), self.heading.sin())
@@ -371,6 +389,8 @@ impl Car {
         self.previous_height = self.height;
         self.previous_heading = self.heading;
         self.impact = (self.impact - DT * 4.).max(0.);
+        self.landing = (self.landing - DT * 3.).max(0.);
+        self.throttle = input.throttle.clamp(0., 1.);
         let spec = CARS[self.spec];
         let tune = preset(physics);
         let road = track.nearest(self.pos);
@@ -393,6 +413,8 @@ impl Car {
         let lateral = self.vel.dot(side);
         self.steer += (input.steer.clamp(-1., 1.) - self.steer) * DT * 8.;
         let speed = longitudinal.abs();
+        let effort = self.throttle * (1. - (longitudinal / spec.top).max(0.).powi(2)).max(0.);
+        self.load += (effort - self.load) * DT * 8.;
         let ground_before = track.ground(road);
         if self.grounded {
             let drive = input.throttle.clamp(0., 1.)
@@ -440,16 +462,19 @@ impl Car {
         self.pos = self.pos + self.vel * DT;
         let next = track.nearest(self.pos);
         let ground = track.ground(next);
+        self.ground_height = ground;
         self.height += self.vertical * DT;
         if self.height <= ground + 0.02 {
             if !self.grounded {
                 self.impact = (-self.vertical / 13.).clamp(0., 1.);
+                self.landing = self.landing.max(self.impact);
             }
             self.height = ground;
             self.grounded = true;
         } else {
             self.grounded = false;
         }
+        self.surface = surface_at(track, next);
         // Railings constrain rocky sections and bridges, shoulders remain drivable elsewhere.
         let rails = track.id == 1 || (track.id == 2 && (20..38).contains(&next.index));
         if rails && next.distance > track.width * 0.5 + 1. {
@@ -527,11 +552,38 @@ pub fn collide(a: &mut Car, b: &mut Car) {
     }
 }
 
+fn surface_at(track: &Track, road: Road) -> usize {
+    if road.distance > track.width * 0.5 {
+        0
+    } else if track.id == 1 {
+        1
+    } else if track.id == 2 && (20..38).contains(&road.index) {
+        2
+    } else {
+        0
+    }
+}
+
 pub fn ai_input(car: &Car, track: &Track, physics: usize) -> Input {
+    ai_drive(car, track, physics, 1, 0., f32::INFINITY)
+}
+
+fn ai_drive(
+    car: &Car,
+    track: &Track,
+    physics: usize,
+    difficulty: usize,
+    lane: f32,
+    speed_cap: f32,
+) -> Input {
     let road = track.nearest(car.pos);
     let speed = car.vel.len();
     let look = 3 + (speed * 0.08) as usize;
-    let target = track.points[(road.index + look) % SAMPLES];
+    let target_index = (road.index + look) % SAMPLES;
+    let target_tangent = (track.points[(target_index + 1) % SAMPLES]
+        - track.points[(target_index + SAMPLES - 1) % SAMPLES])
+        .unit();
+    let target = track.points[target_index] + target_tangent.normal() * lane;
     let direction = target - car.pos;
     let error = angle_diff(direction.y.atan2(direction.x), car.heading);
     let tangent_a = (track.points[(road.index + 3) % SAMPLES] - road.pos).unit();
@@ -544,39 +596,169 @@ pub fn ai_input(car: &Car, track: &Track, physics: usize) -> Input {
     )
     .abs();
     let grip = (CARS[car.spec].grip * preset(physics).grip).sqrt().min(1.2);
+    // Difficulty changes pace; handling still determines safe corner speed.
+    let pace = [0.84, 1., 1.12][difficulty.min(2)];
     let desired =
-        (CARS[car.spec].top * (0.65 - physics as f32 * 0.045) * grip / (1. + bend * 2.8)).max(7.);
+        ((CARS[car.spec].top * 0.62 * grip / (1. + bend * 2.8)).max(7.) * pace).min(speed_cap);
+    let error_speed = desired - speed;
     Input {
-        throttle: if speed < desired { 0.9 } else { 0.12 },
-        brake: if speed > desired + 2. { 0.5 } else { 0. },
+        throttle: (error_speed * 0.6).clamp(0., 0.9),
+        // Brake becomes reverse near rest, so reduce the final pulse to avoid backing into traffic.
+        brake: if error_speed < -0.15 && car.vel.dot(car.forward()) > 0.05 {
+            ((-error_speed * 0.22).clamp(0., 1.)).min(speed / (20. * DT))
+        } else {
+            0.
+        },
         steer: (error * 2.1 - car.yaw * 0.18).clamp(-1., 1.),
         handbrake: false,
     }
+}
+
+#[derive(Clone, Default)]
+struct AiState {
+    lane: f32,
+    target_lane: f32,
+    commitment: f32,
+    waiting: bool,
+}
+
+fn traffic_input(
+    index: usize,
+    cars: &[Car],
+    track: &Track,
+    physics: usize,
+    difficulty: usize,
+    state: &mut AiState,
+) -> Input {
+    let car = &cars[index];
+    let road = track.nearest(car.pos);
+    let forward = road.tangent;
+    let side = forward.normal();
+    let lateral = (car.pos - road.pos).dot(side);
+    let speed = car.vel.dot(forward).max(0.);
+    let margin = track.width * 0.5 - 1.8;
+    state.commitment = (state.commitment - DT).max(0.);
+    state.waiting = false;
+    let mut lead: Option<(f32, f32, f32)> = None;
+    for (other_index, other) in cars.iter().enumerate() {
+        if other_index == index || (other.height - car.height).abs() > 1.6 {
+            continue;
+        }
+        let delta = other.pos - car.pos;
+        let ahead = delta.dot(forward);
+        let across = delta.dot(side);
+        if ahead > 0.
+            && ahead < 10. + speed * 1.4
+            && across.abs() < 3.5
+            && lead.is_none_or(|(gap, _, _)| ahead < gap)
+        {
+            lead = Some((ahead, lateral + across, other.vel.dot(forward).max(0.)));
+        }
+    }
+    if let Some((gap, lead_lane, lead_speed)) = lead {
+        if state.commitment <= 0. && (lead_speed < speed + 1. || gap < 7.) {
+            // Choose an open adjacent corridor. Check the entire lateral move as well as
+            // its destination, so a passing car never cuts through a car alongside it.
+            let mut candidates = [lead_lane - 3.9, lead_lane + 3.9];
+            candidates.sort_by(|a, b| (a - lateral).abs().total_cmp(&(b - lateral).abs()));
+            for candidate in candidates {
+                if candidate.abs() > margin {
+                    continue;
+                }
+                let clear = cars.iter().enumerate().all(|(other_index, other)| {
+                    if other_index == index || (other.height - car.height).abs() > 1.6 {
+                        return true;
+                    }
+                    let delta = other.pos - car.pos;
+                    let ahead = delta.dot(forward);
+                    let other_lane = lateral + delta.dot(side);
+                    let in_corridor = (other_lane - candidate).abs() < 3.4;
+                    let crosses_move = other_lane > lateral.min(candidate) - 2.8
+                        && other_lane < lateral.max(candidate) + 2.8;
+                    !(ahead > -7. && ahead < 15. && in_corridor
+                        || ahead.abs() < 3.5 && crosses_move)
+                });
+                if clear {
+                    state.target_lane = candidate;
+                    state.commitment = 1.4;
+                    break;
+                }
+            }
+        }
+    } else if state.commitment <= 0. {
+        // Hold position while alongside another car; otherwise gently return to a racing line.
+        let alongside = cars.iter().enumerate().any(|(other_index, other)| {
+            other_index != index
+                && (other.pos - car.pos).dot(forward).abs() < 6.
+                && (other.pos - car.pos).dot(side).abs() < 6.
+        });
+        if !alongside {
+            state.target_lane = if index.is_multiple_of(2) { -1.8 } else { 1.8 };
+        }
+    }
+    state.lane +=
+        (state.target_lane.clamp(-margin, margin) - state.lane).clamp(-DT * 2.5, DT * 2.5);
+    let mut speed_cap = f32::INFINITY;
+    if let Some((gap, _, lead_speed)) = lead {
+        // Leave room to stop even during a lane change. No pace adjustment depends on
+        // the player's standing or lap time: this is local collision avoidance only.
+        speed_cap = (lead_speed * lead_speed + 16. * (gap - 4.2).max(0.)).sqrt();
+        if gap < 4.2 {
+            speed_cap = (lead_speed - (4.2 - gap) * 3.).max(0.);
+        }
+        state.waiting = lead_speed < 1. && gap < 6.;
+    }
+    ai_drive(car, track, physics, difficulty, state.lane, speed_cap)
 }
 
 pub struct Race {
     pub track: Track,
     pub cars: Vec<Car>,
     pub physics: usize,
+    pub difficulty: usize,
     pub trial: bool,
     pub countdown: f32,
     pub elapsed: f32,
     pub accumulator: f32,
+    ai: Vec<AiState>,
 }
 impl Race {
     pub fn new(track: usize, car: usize, physics: usize, trial: bool) -> Self {
+        Self::with_difficulty(track, car, physics, trial, 1)
+    }
+    pub fn with_difficulty(
+        track: usize,
+        car: usize,
+        physics: usize,
+        trial: bool,
+        difficulty: usize,
+    ) -> Self {
         let track = Track::new(track);
-        let cars = (0..if trial { 1 } else { 6 })
+        let cars: Vec<_> = (0..if trial { 1 } else { 6 })
             .map(|i| Car::spawn(&track, if i == 0 { car } else { (i - 1) % 4 }, i))
+            .collect();
+        let ai = cars
+            .iter()
+            .map(|car| {
+                let road = track.nearest(car.pos);
+                let lane = (car.pos - road.pos).dot(road.tangent.normal());
+                AiState {
+                    lane,
+                    target_lane: lane,
+                    ..AiState::default()
+                }
+            })
             .collect();
         Self {
             track,
             cars,
             physics,
+            difficulty: difficulty.min(2),
             trial,
             countdown: 3.,
             elapsed: 0.,
             accumulator: 0.,
+            ai,
         }
     }
     pub fn tick(&mut self, input: Input) {
@@ -585,15 +767,28 @@ impl Race {
             return;
         }
         self.elapsed += DT;
-        for i in 0..self.cars.len() {
-            let control = if i == 0 && !self.cars[0].finished {
-                input
-            } else {
-                ai_input(&self.cars[i], &self.track, self.physics)
-            };
+        // Every controller observes the same instant, independent of update order.
+        let snapshot = self.cars.clone();
+        let controls: Vec<_> = (0..snapshot.len())
+            .map(|i| {
+                if i == 0 && !snapshot[0].finished {
+                    input
+                } else {
+                    traffic_input(
+                        i,
+                        &snapshot,
+                        &self.track,
+                        self.physics,
+                        self.difficulty,
+                        &mut self.ai[i],
+                    )
+                }
+            })
+            .collect();
+        for (i, control) in controls.into_iter().enumerate() {
             self.cars[i].step(control, &self.track, self.physics);
             if i > 0 {
-                if self.cars[i].vel.len() < 2. {
+                if self.cars[i].vel.len() < 2. && !self.ai[i].waiting {
                     self.cars[i].stuck += DT;
                 } else {
                     self.cars[i].stuck = 0.;
@@ -893,5 +1088,167 @@ mod tests {
             );
         }
         assert!(reverse.vel.dot(reverse.forward()) < -1.);
+    }
+
+    #[test]
+    fn idle_grid_player_is_not_pushed_by_rivals() {
+        for track in 0..3 {
+            for physics in 0..3 {
+                for difficulty in 0..3 {
+                    let mut race = Race::with_difficulty(track, 0, physics, false, difficulty);
+                    let start = race.cars[0].pos;
+                    for _ in 0..60 * 12 {
+                        race.tick(Input::default());
+                    }
+                    assert!(
+                        (race.cars[0].pos - start).len() < 0.1,
+                        "idle player pushed: track={track} physics={physics} difficulty={difficulty}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn blocked_pass_brakes_and_open_pass_commits() {
+        let track = Track::new(0);
+        let (p, tangent) = track.checkpoint(0);
+        let mut follower = Car::spawn(&track, 0, 0);
+        follower.pos = p;
+        follower.vel = tangent * 10.;
+        let mut leader = follower.clone();
+        leader.pos = p + tangent * 5.;
+        leader.vel = tangent * 3.;
+        let mut left = leader.clone();
+        left.pos = p + tangent * 2. + tangent.normal() * -3.9;
+        let mut right = left.clone();
+        right.pos = p + tangent * 2. + tangent.normal() * 3.9;
+        let mut cars = vec![follower, leader, left, right];
+        let mut state = AiState::default();
+        let control = traffic_input(0, &cars, &track, 0, 1, &mut state);
+        assert_eq!(control.throttle, 0.);
+        assert!(control.brake > 0.);
+        assert_eq!(state.target_lane, 0.);
+        assert_eq!(state.commitment, 0.);
+
+        cars.truncate(2);
+        cars[1].pos = p + tangent * 12.;
+        traffic_input(0, &cars, &track, 0, 1, &mut state);
+        assert!(state.target_lane.abs() > 3.);
+        assert!(state.commitment > 1.);
+        let chosen_lane = state.target_lane;
+        // A small change in the leader's line must not flip passing side every tick.
+        cars[1].pos = cars[1].pos + tangent.normal() * chosen_lane.signum() * 0.4;
+        traffic_input(0, &cars, &track, 0, 1, &mut state);
+        assert_eq!(state.target_lane, chosen_lane);
+    }
+
+    #[test]
+    fn side_by_side_rivals_keep_separate_corridors() {
+        for physics in 0..3 {
+            let track = Track::new(0);
+            let mut cars = vec![Car::spawn(&track, 0, 0), Car::spawn(&track, 0, 1)];
+            for car in &mut cars {
+                car.vel = car.forward() * 10.;
+            }
+            let mut states: Vec<_> = cars
+                .iter()
+                .map(|car| {
+                    let road = track.nearest(car.pos);
+                    let lane = (car.pos - road.pos).dot(road.tangent.normal());
+                    AiState {
+                        lane,
+                        target_lane: lane,
+                        ..AiState::default()
+                    }
+                })
+                .collect();
+            for _ in 0..120 {
+                let snapshot = cars.clone();
+                for i in 0..cars.len() {
+                    let control = traffic_input(i, &snapshot, &track, physics, 1, &mut states[i]);
+                    cars[i].step(control, &track, physics);
+                }
+                assert!((cars[0].pos - cars[1].pos).len() >= 2.8);
+            }
+        }
+    }
+
+    #[test]
+    fn difficulty_does_not_change_player_handling() {
+        let mut easy = Race::with_difficulty(0, 2, 1, true, 0);
+        let mut hard = Race::with_difficulty(0, 2, 1, true, 2);
+        assert_eq!(Race::new(0, 0, 0, false).difficulty, 1);
+        assert_eq!(Race::with_difficulty(0, 0, 0, false, 99).difficulty, 2);
+        for _ in 0..600 {
+            let input = ai_input(&easy.cars[0], &easy.track, easy.physics);
+            easy.tick(input);
+            hard.tick(input);
+        }
+        assert!((easy.cars[0].pos - hard.cars[0].pos).len() < 0.0001);
+        assert!((easy.cars[0].vel - hard.cars[0].vel).len() < 0.0001);
+    }
+
+    #[test]
+    fn feedback_reports_drive_landing_surface_and_reset() {
+        let track = Track::new(0);
+        let mut car = Car::spawn(&track, 0, 0);
+        car.step(
+            Input {
+                throttle: 1.,
+                ..Input::default()
+            },
+            &track,
+            0,
+        );
+        assert_eq!(car.throttle, 1.);
+        assert!(car.load > 0. && car.load <= 1.);
+        assert_eq!(car.surface, 0);
+        car.height += 4.;
+        car.vertical = -8.;
+        car.grounded = false;
+        let mut peak = 0_f32;
+        for _ in 0..60 {
+            car.step(Input::default(), &track, 0);
+            peak = peak.max(car.landing);
+        }
+        assert!(peak > 0.5 && peak <= 1.);
+        assert_eq!(car.landing, 0.);
+        car.reset(&track);
+        assert_eq!(
+            car.throttle + car.load + car.landing + car.slip + car.impact,
+            0.
+        );
+        assert_eq!(Car::spawn(&Track::new(1), 0, 0).surface, 1);
+        let lagoon = Track::new(2);
+        car.pos = lagoon.points[24];
+        car.height = lagoon.ground(lagoon.nearest(car.pos));
+        car.step(Input::default(), &lagoon, 0);
+        assert_eq!(car.surface, 2);
+    }
+
+    #[test]
+    fn all_grid_configurations_finish_at_each_difficulty() {
+        for track in 0..3 {
+            for car in 0..4 {
+                for physics in 0..3 {
+                    for difficulty in 0..3 {
+                        let mut race =
+                            Race::with_difficulty(track, car, physics, false, difficulty);
+                        for _ in 0..60 * 360 {
+                            let input = ai_input(&race.cars[0], &race.track, physics);
+                            race.tick(input);
+                            if race.cars.iter().all(|car| car.finished) {
+                                break;
+                            }
+                        }
+                        assert!(
+                            race.cars.iter().all(|car| car.finished),
+                            "grid unfinished: track={track} car={car} physics={physics} difficulty={difficulty}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

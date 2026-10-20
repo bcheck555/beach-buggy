@@ -12,6 +12,7 @@ extern "C" {
     fn bb_read(key: i32) -> f32;
     fn bb_store(key: i32, value: f32);
     fn bb_event(kind: i32, strength: f32);
+    // Keep this append-only argument order synchronized with web/bridge.js.
     fn bb_telemetry(
         state: i32,
         speed: f32,
@@ -24,6 +25,12 @@ extern "C" {
         slip: f32,
         impact: f32,
         grounded: i32,
+        throttle: f32,
+        load: f32,
+        surface: i32,
+        landing: f32,
+        pb_delta: f32,
+        new_best: i32,
     );
 }
 pub fn command() -> i32 {
@@ -43,8 +50,10 @@ pub fn option(index: i32) -> f32 {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let _ = index;
-        0.
+        match index {
+            6 | 7 => 1.,
+            _ => 0.,
+        }
     }
 }
 pub fn pad(index: i32) -> f32 {
@@ -102,6 +111,12 @@ pub struct Telemetry {
     pub slip: f32,
     pub impact: f32,
     pub grounded: bool,
+    pub throttle: f32,
+    pub load: f32,
+    pub surface: usize,
+    pub landing: f32,
+    pub pb_delta: f32,
+    pub new_best: bool,
 }
 pub fn telemetry(t: Telemetry) {
     #[cfg(target_arch = "wasm32")]
@@ -118,6 +133,12 @@ pub fn telemetry(t: Telemetry) {
             t.slip,
             t.impact,
             i32::from(t.grounded),
+            t.throttle,
+            t.load,
+            t.surface as i32,
+            t.landing,
+            t.pb_delta,
+            i32::from(t.new_best),
         );
     }
     #[cfg(not(target_arch = "wasm32"))]
