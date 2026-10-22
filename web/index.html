@@ -51,6 +51,7 @@
     <div id="countdown" aria-live="polite"></div>
     <div id="player-badge" class="player-badge" hidden><span>YOU</span><strong id="player-car">Sunrunner</strong><small>FOLLOW YOUR HALO</small></div>
     <div id="race-announcement" role="status" aria-live="polite" hidden></div>
+    <div id="race-zoom" class="track-zoom" data-zoom-controls role="group" aria-label="Track zoom" hidden><div class="zoom-buttons"><button data-zoom="out" aria-label="Zoom out">−</button><output data-zoom-value aria-label="Track zoom level">100%</output><button data-zoom="in" aria-label="Zoom in">+</button><button data-zoom="fit">Fit</button></div><small>+ / − ZOOM · 0 FIT</small></div>
   </section>
   <div id="modal" hidden>
     <div class="finish-celebration" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
@@ -58,6 +59,7 @@
       <span class="eyebrow" id="modal-eyebrow">TAKE A BREATHER</span><h2 id="modal-title">Coast is clear.</h2><p id="modal-description">Your next corner can wait.</p>
       <div id="results" hidden><div><span>FINISH</span><b id="result-position"></b></div><div><span>TOTAL TIME</span><b id="result-time"></b></div><div><span>BEST LAP</span><b id="result-best"></b></div><p id="personal-best" role="status" hidden></p></div>
       <div class="pause-options" id="pause-options"><div class="option-grid"><label>RIVALS · NEXT RACE<select id="pause-difficulty" data-option="6" aria-label="Opponent difficulty for next race"><option value="0">Easy</option><option value="1">Normal</option><option value="2">Hard</option></select></label><label>SCENERY<select id="pause-quality" data-option="7" aria-label="Graphics quality during race"><option value="0">Low detail</option><option value="1">High detail</option></select></label><label>CAMERA VIEW<select id="pause-camera-view" data-option="9" aria-label="Camera view during race"><option value="0">Follow car</option><option value="1">Whole track</option></select></label></div><label class="motion-option"><input id="pause-reduced-motion" data-motion type="checkbox"> Reduce camera motion</label></div>
+      <div id="pause-zoom" class="track-zoom" data-zoom-controls role="group" aria-label="Track zoom during pause" hidden><div class="zoom-buttons"><button data-zoom="out" aria-label="Zoom out">−</button><output data-zoom-value aria-label="Track zoom level">100%</output><button data-zoom="in" aria-label="Zoom in">+</button><button data-zoom="fit">Fit</button></div><small>+ / − ZOOM · 0 FIT</small></div>
       <label class="volume-control">SOUND LEVEL <input id="volume" type="range" min="0" max="100" value="55" aria-label="Sound volume"></label><button id="resume" class="start"><span>BACK TO THE COAST</span><span>↗</span></button><button id="restart" class="secondary">Race again</button><button id="back-menu" class="text-button">Back to garage</button>
     </section>
   </div>

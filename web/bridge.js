@@ -21,6 +21,7 @@
   const bounded = (value,max,fallback=0) => Number.isInteger(value) && value >= 0 && value <= max ? value : fallback;
   const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
   const options = [bounded(settings.track,2), bounded(settings.car,3), bounded(settings.physics,2), bounded(settings.mode,1), 0, new URLSearchParams(location.search).get('autodrive') === '1' ? 1 : 0, bounded(settings.difficulty,2,1), bounded(settings.quality,1,1), typeof settings.reducedMotion === 'boolean' ? Number(settings.reducedMotion) : Number(prefersReducedMotion), bounded(settings.cameraView,1)];
+  const trackZoom = tracks.map((_,i)=>{const value=Array.isArray(settings.trackZoom)?settings.trackZoom[i]:null;return Number.isInteger(value)&&value>=50&&value<=200&&value%10===0?value:100;});
   let volume = typeof settings.volume === 'number' && Number.isFinite(settings.volume) ? Math.max(0,Math.min(1,settings.volume)) : 0.55;
   let muted = settings.muted === true;
   let pending = 0, ready = false, currentState = -1, lastUI = 0, lastImpact = 0, lastLanding = 0;
@@ -28,8 +29,21 @@
   let announcementTimer;
   let padCache = null, padTime = -1;
   let latest = null;
-  const persist = () => storage.set('settings',JSON.stringify({track:options[0],car:options[1],physics:options[2],mode:options[3],difficulty:options[6],quality:options[7],reducedMotion:!!options[8],cameraView:options[9],volume,muted}));
+  const persist = () => storage.set('settings',JSON.stringify({track:options[0],car:options[1],physics:options[2],mode:options[3],difficulty:options[6],quality:options[7],reducedMotion:!!options[8],cameraView:options[9],trackZoom,volume,muted}));
   const queue = command => { if (ready) pending = command; };
+  function refreshZoom() {
+    const value=trackZoom[options[0]];
+    document.querySelectorAll('[data-zoom-controls]').forEach(el=>{el.hidden=options[9]!==1||(el.id==='race-zoom'?currentState!==1:currentState!==2);});
+    document.querySelectorAll('[data-zoom-value]').forEach(el=>{el.textContent=`${value}%`;});
+    document.querySelectorAll('[data-zoom="out"]').forEach(el=>{el.disabled=value===50;});
+    document.querySelectorAll('[data-zoom="in"]').forEach(el=>{el.disabled=value===200;});
+  }
+  function changeZoom(action) {
+    if(options[9]!==1||(currentState!==1&&currentState!==2))return;
+    trackZoom[options[0]]=action==='fit'?100:Math.max(50,Math.min(200,trackZoom[options[0]]+(action==='in'?10:-10)));
+    refreshZoom();persist();
+  }
+  document.querySelectorAll('[data-zoom]').forEach(el=>el.onclick=()=>{changeZoom(el.dataset.zoom);if(currentState===1)$('glcanvas').focus({preventScroll:true});});
   function refresh() {
     const c = cars[options[1]];
     $('car-name').textContent=c[0]; $('car-tagline').textContent=c[1];
@@ -43,6 +57,7 @@
     document.querySelectorAll('[data-motion]').forEach(el=>{el.checked=!!options[8];});
     document.body.dataset.reducedMotion=String(!!options[8]);
     document.body.dataset.cameraView=options[9]===1?'whole-track':'follow';
+    refreshZoom();
     $('difficulty').disabled=!!options[3]; $('pause-difficulty').disabled=!!options[3];
     $('setup-summary').textContent=`${options[3]?'Solo laps':['Easy','Normal','Hard'][options[6]]+' rivals'} · ${options[7]?'High':'Low'} detail`;
     $('player-car').textContent=c[0];
@@ -116,6 +131,11 @@
   document.addEventListener('pointerdown',startAudio,{once:true});
   document.addEventListener('keydown',e=>{
     startAudio();
+    const editing=e.target instanceof Element&&e.target.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])');
+    if(options[9]===1&&(currentState===1||currentState===2)&&!e.repeat&&!e.ctrlKey&&!e.metaKey&&!e.altKey&&!editing) {
+      const action=['+','='].includes(e.key)||e.code==='NumpadAdd'?'in':e.key==='-'||e.key==='−'||e.code==='NumpadSubtract'?'out':e.key==='0'||e.code==='Numpad0'?'fit':null;
+      if(action){e.preventDefault();changeZoom(action);}
+    }
     if(currentState===1 && ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','Escape'].includes(e.code))e.preventDefault();
   });
   document.addEventListener('visibilitychange',()=>{if(document.hidden&&currentState===1)queue(5);});
@@ -134,6 +154,7 @@
   };
   function stateUI(state) {
     currentState=state;
+    refreshZoom();
     document.body.dataset.state=['menu','race','pause','results'][state]||'loading';
     $('hud').hidden=state===0;
     $('modal').hidden=state!==2&&state!==3;
@@ -148,7 +169,7 @@
   miniquad_add_plugin({name:'coast',version:1,register_plugin(imports) {
     Object.assign(imports.env,{
       bb_command() {const c=pending;pending=0;return c;},
-      bb_option(index) {return options[index]||0;},
+      bb_option(index) {return index===10?trackZoom[options[0]]/100:options[index]||0;},
       bb_gamepad(index) {
         const p=gamepad();if(!p)return 0;
         const button=i=>Math.max(0,Math.min(1,p.buttons[i]?.value||0));

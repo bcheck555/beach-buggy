@@ -118,7 +118,7 @@ test('legacy saves retain choices and records; new settings default safely',asyn
     localStorage.setItem('coast-v1:100','45.5');
   });
   const errors=await ready(page);
-  expect(await page.evaluate(()=>[6,7,8,9].map(i=>importObject.env.bb_option(i)))).toEqual([1,1,1,0]);
+  expect(await page.evaluate(()=>[6,7,8,9,10].map(i=>importObject.env.bb_option(i)))).toEqual([1,1,1,0,1]);
   await expect(page.locator('#camera-view')).toHaveValue('0');
   await expect(page.locator('#pause-camera-view')).toHaveValue('0');
   await expect(page.locator('body')).toHaveAttribute('data-camera-view','follow');
@@ -175,6 +175,93 @@ test('camera view defaults, switches immediately, synchronizes, and persists ind
   expect(errors).toEqual([]);
 });
 
+test('whole-track zoom controls synchronize, clamp, persist per track, and preserve focus',async({page})=>{
+  const errors=await presentationReady(page);
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1);
+  await expect(page.locator('#race-zoom')).toBeHidden();
+  await page.locator('.setup-options summary').click();await page.locator('#camera-view').selectOption('1');
+  await page.keyboard.press('=');
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1);
+  await telemetry(page);await expect(page.locator('#race-zoom')).toBeVisible();
+  expect(await page.locator('#race-zoom [data-zoom="in"]').evaluate(el=>{const style=getComputedStyle(el);return style.color!==style.backgroundColor;})).toBe(true);
+  await page.locator('#race-zoom [data-zoom="in"]').click();
+  await expect(page.locator('#glcanvas')).toBeFocused();
+  await expect(page.locator('#race-zoom output')).toHaveText('110%');
+  await page.keyboard.press('+');await page.keyboard.press('NumpadAdd');
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1.3);
+  await page.keyboard.press('NumpadSubtract');
+  await page.evaluate(()=>document.dispatchEvent(new KeyboardEvent('keydown',{key:'=',repeat:true,bubbles:true})));
+  await page.evaluate(()=>document.dispatchEvent(new KeyboardEvent('keydown',{key:'=',ctrlKey:true,bubbles:true})));
+  await page.evaluate(()=>document.dispatchEvent(new KeyboardEvent('keydown',{key:'=',metaKey:true,bubbles:true})));
+  await page.evaluate(()=>document.dispatchEvent(new KeyboardEvent('keydown',{key:'=',altKey:true,bubbles:true})));
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1.2);
+  await telemetry(page,{state:2});await expect(page.locator('#race-zoom')).toBeHidden();
+  await expect(page.locator('#pause-zoom output')).toHaveText('120%');
+  await page.locator('#pause-zoom [data-zoom="in"]').click();
+  await expect(page.locator('#pause-zoom [data-zoom="in"]')).toBeFocused();
+  await page.locator('#volume').focus();await page.keyboard.press('=');
+  await page.locator('#pause-camera-view').focus();await page.keyboard.press('=');
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1.3);
+  await page.evaluate(()=>{const editable=document.createElement('div');editable.contentEditable='true';document.body.append(editable);editable.focus();editable.dispatchEvent(new KeyboardEvent('keydown',{key:'=',bubbles:true}));editable.remove();});
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1.3);
+  await page.locator('#resume').focus();
+  for(let i=0;i<15;i++)await page.keyboard.press('=');
+  await expect(page.locator('#pause-zoom [data-zoom="in"]')).toBeDisabled();
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(2);
+  for(let i=0;i<20;i++)await page.keyboard.press('-');
+  await expect(page.locator('#pause-zoom [data-zoom="out"]')).toBeDisabled();
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(.5);
+  await page.keyboard.press('Numpad0');expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1);
+  await page.locator('#pause-zoom [data-zoom="in"]').click();
+  await page.locator('#pause-camera-view').selectOption('0');await expect(page.locator('#pause-zoom')).toBeHidden();
+  await page.locator('#resume').focus();await page.keyboard.press('=');
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1.1);
+  await page.locator('#pause-camera-view').selectOption('1');
+  await telemetry(page,{state:0});await page.locator('[data-track="1"]').click();
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1);
+  await telemetry(page);await page.keyboard.press('-');
+  await telemetry(page,{state:0});await page.locator('[data-track="0"]').click();
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1.1);
+  await page.reload();await expect(page.locator('#start')).toBeEnabled();
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1.1);
+  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('coast-v1:settings')).trackZoom)).toEqual([110,90,100]);
+  await telemetry(page);await page.locator('#race-zoom [data-zoom="fit"]').click();
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test('invalid zoom entries default independently; legacy saves use Fit',async({page})=>{
+  await presentationReady(page);
+  for(const trackZoom of [null,{},[50,150,200],[40,110,201],['100',115,null],[true,NaN,Infinity]]) {
+    await page.evaluate(trackZoom=>localStorage.setItem('coast-v1:settings',JSON.stringify({trackZoom})),trackZoom);
+    await page.reload();await expect(page.locator('#start')).toBeEnabled();
+    const expected=Array.from({length:3},(_,i)=>{const value=trackZoom?.[i];return Number.isInteger(value)&&value>=50&&value<=200&&value%10===0?value:100;});
+    expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('coast-v1:settings')).trackZoom)).toEqual(expected);
+    for(let track=0;track<3;track++){await page.locator(`[data-track="${track}"]`).click();expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(expected[track]/100);}
+  }
+});
+
+test('whole-track zoom and status controls do not overlap at narrow sizes',async({page})=>{
+  await presentationReady(page);
+  await page.locator('.setup-options summary').click();await page.locator('#camera-view').selectOption('1');
+  await telemetry(page,{elapsed:0,countdown:3});
+  const noOverlap=async(selectors,width,height)=>{
+    const boxes=await page.evaluate(selectors=>selectors.map(selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom};}),selectors);
+    for(const r of boxes){expect(r.x).toBeGreaterThanOrEqual(0);expect(r.right).toBeLessThanOrEqual(width);expect(r.y).toBeGreaterThanOrEqual(0);expect(r.bottom).toBeLessThanOrEqual(height);}
+    for(let i=0;i<boxes.length;i++)for(let j=i+1;j<boxes.length;j++){const a=boxes[i],b=boxes[j];expect(a.right<=b.x||b.right<=a.x||a.bottom<=b.y||b.bottom<=a.y).toBe(true);}
+  };
+  for(const [width,height] of [[320,568],[381,568],[600,900]]) {
+    await page.setViewportSize({width,height});
+    await telemetry(page,{elapsed:0,countdown:3});
+    await noOverlap(['.race-metrics','#pause','.speedometer','#race-zoom','#player-badge'],width,height);
+    await telemetry(page,{lap:2});
+    await noOverlap(['.speedometer','#race-zoom','#race-announcement'],width,height);
+  }
+  await telemetry(page,{state:2});
+  await page.locator('#pause-zoom [data-zoom="in"]').click();await page.locator('#pause-zoom [data-zoom="fit"]').click();
+  await expect(page.locator('#pause-zoom output')).toHaveText('100%');
+});
+
 test('invalid camera preferences fall back to Follow car',async({page})=>{
   const errors=await presentationReady(page);
   for(const cameraView of [-1,2,0.5,'1',true,null]) {
@@ -201,6 +288,8 @@ test('camera controls work when storage is unavailable',async({page})=>{
   expect(await page.evaluate(()=>importObject.env.bb_option(9))).toBe(1);
   await expect(page.locator('#pause-camera-view')).toHaveValue('1');
   await telemetry(page,{state:2});
+  await page.locator('#pause-zoom [data-zoom="in"]').click();
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1.1);
   await page.locator('#pause-camera-view').selectOption('0');
   expect(await page.evaluate(()=>importObject.env.bb_option(9))).toBe(0);
   await expect(page.locator('#camera-view')).toHaveValue('0');
@@ -257,8 +346,31 @@ for(const track of [0,1,2])test(`whole-track framing for track ${track} at deskt
   for(const [name,width,height] of [['desktop',1440,900],['narrow',600,900]]) {
     await page.setViewportSize({width,height});
     await page.waitForTimeout(200);
-    await page.screenshot({path:info.outputPath(`whole-track-${track}-${name}.png`)});
+    await page.keyboard.press('0');
+    await page.waitForTimeout(100);
+    const fit=await page.evaluate(()=>window.raceProjection);
+    // Solve the ground-plane point at viewport center from the actual WebGL
+    // matrix, then verify zoom scales around that exact point without panning.
+    const determinant=fit[0]*fit[9]-fit[8]*fit[1];
+    const center={x:(-fit[12]*fit[9]+fit[8]*fit[13])/determinant,z:(-fit[0]*fit[13]+fit[12]*fit[1])/determinant};
+    await page.screenshot({path:info.outputPath(`whole-track-${track}-${name}-fit.png`)});
+    for(let i=0;i<5;i++)await page.keyboard.press('=');
+    await expect.poll(()=>page.evaluate(()=>importObject.env.bb_option(10))).toBe(1.5);
+    await expect.poll(()=>page.evaluate(()=>window.raceProjection[0])).toBeCloseTo(fit[0]*1.5,6);
+    const zoomed=await page.evaluate(()=>window.raceProjection);
+    for(const index of [0,1,4,5,8,9])expect(zoomed[index]).toBeCloseTo(fit[index]*1.5,5);
+    expect(zoomed[0]*center.x+zoomed[8]*center.z+zoomed[12]).toBeCloseTo(0,5);
+    expect(zoomed[1]*center.x+zoomed[9]*center.z+zoomed[13]).toBeCloseTo(0,5);
+    await page.screenshot({path:info.outputPath(`whole-track-${track}-${name}-zoomed.png`)});
   }
+  await page.setViewportSize({width:900,height:900});
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1.5);
+  await page.waitForTimeout(100);
+  const beforeRestart=await page.evaluate(()=>window.raceProjection);
+  await page.keyboard.press('Escape');await expect(page.locator('body')).toHaveAttribute('data-state','pause');
+  await page.locator('#restart').click();await expect(page.locator('body')).toHaveAttribute('data-state','race');
+  expect(await page.evaluate(()=>importObject.env.bb_option(10))).toBe(1.5);
+  await expect.poll(()=>page.evaluate(()=>window.raceProjection)).toEqual(beforeRestart);
   expect(errors).toEqual([]);
 });
 

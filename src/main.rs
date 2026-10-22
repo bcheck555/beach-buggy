@@ -226,7 +226,7 @@ async fn main() {
             });
         } else {
             track_camera.update(&race.track, screen_width(), screen_height());
-            set_camera(&track_camera.camera());
+            set_camera(&track_camera.camera(bridge::option(10)));
         }
         let overview = state == 0;
         scenery.draw(get_time() as f32, high_quality);

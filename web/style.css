@@ -31,8 +31,8 @@ body[data-reduced-motion=true] .finish-celebration{display:none}
 @media(max-height:780px){.garage{max-height:calc(87vh - 30px)}.setup-options{margin-bottom:12px}.setup-options summary{padding:9px 0}}
 @media(max-width:950px){#race-announcement{right:25px;top:200px;font-size:9px}.player-badge small{display:none}}
 @media(max-width:650px){.garage{max-height:none}.tracks{top:824px}footer{top:974px}body[data-state=menu]{min-height:1010px}.player-badge{bottom:28px}.player-badge strong{font-size:10px}#race-announcement{top:185px}}
-/* Keep the circuit clear inside the camera's 180px/30vh and 120px/24vh bands. */
-body[data-camera-view=whole-track] .race-top{top:min(98px,calc(30vh - 78px))}
+/* Whole-track controls stay in corners around the centered circuit. */
+body[data-camera-view=whole-track] .race-top{top:82px}
 body[data-camera-view=whole-track] .race-metrics{padding:8px 12px;gap:15px}
 body[data-camera-view=whole-track] .race-metrics strong{font-size:24px;margin-top:3px}
 body[data-camera-view=whole-track] .race-name strong{font-size:20px}
@@ -40,7 +40,17 @@ body[data-camera-view=whole-track] .speedometer{bottom:24px;left:24px;width:125p
 body[data-camera-view=whole-track] .speedometer>span{font-size:44px;letter-spacing:-2px}
 body[data-camera-view=whole-track] .player-badge{bottom:28px}
 body[data-camera-view=whole-track] .driving-help{display:none}
-body[data-camera-view=whole-track] #race-announcement{top:auto;bottom:12px;right:24px}
+body[data-camera-view=whole-track] #race-announcement{top:auto;bottom:100px;right:24px}
+.track-zoom{font-size:11px;letter-spacing:.5px}
+.zoom-buttons{display:flex;align-items:center;gap:6px}
+.zoom-buttons button{border:1px solid #8ba49a;background:var(--cream);color:var(--ink);min-width:34px;min-height:34px;padding:5px 9px;font-weight:700}
+.zoom-buttons button:disabled{cursor:default;opacity:.45}
+.zoom-buttons output{min-width:46px;text-align:center;font-variant-numeric:tabular-nums}
+.track-zoom>small{display:block;font-size:8px;margin-top:7px;letter-spacing:1px}
+#race-zoom{position:absolute;bottom:24px;right:24px;pointer-events:auto;background:#143d3de8;padding:10px;border:1px solid #ffffff30}
+#pause-zoom{margin-top:16px}
+@media(max-width:650px){body[data-camera-view=whole-track] .player-badge{bottom:130px;left:24px;transform:none}body[data-camera-view=whole-track] #race-announcement{bottom:182px;left:24px;right:auto;max-width:calc(100% - 48px)}body[data-camera-view=whole-track] .race-top{left:20px;right:20px}#race-zoom{right:20px;bottom:24px}.zoom-buttons{gap:4px}}
+@media(max-width:380px){#race-zoom{bottom:125px}body[data-camera-view=whole-track] .race-top{gap:8px}body[data-camera-view=whole-track] .race-metrics{gap:8px;padding:6px 8px}body[data-camera-view=whole-track] .race-metrics>div{min-width:32px}body[data-camera-view=whole-track] .race-metrics .time-metric{min-width:100px}body[data-camera-view=whole-track] .player-badge{bottom:215px}body[data-camera-view=whole-track] #race-announcement{bottom:265px}}
 @media(max-width:650px){
   #menu{padding-top:240px}
   #menu .garage{position:relative;top:auto;left:auto;right:auto;margin:0 25px;width:auto}

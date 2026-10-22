@@ -16,12 +16,24 @@ impl TrackCamera {
         let width = width.max(1.);
         let height = height.max(1.);
         let (sin, cos) = ELEVATION.sin_cos();
-        let mut min = vec2(f32::INFINITY, f32::INFINITY);
-        let mut max = vec2(f32::NEG_INFINITY, f32::NEG_INFINITY);
-        // Fit the circuit and immediate shoulders, rather than the full recovery
-        // area. A small runoff margin keeps roadside cars and jumps readable.
-        let radius = track.width * 0.5 + 6.;
-        for (point, ground) in track.points.iter().zip(&track.heights) {
+        let mut road_min = Vec2::splat(f32::INFINITY);
+        let mut road_max = Vec2::splat(f32::NEG_INFINITY);
+        let mut min = road_min;
+        let mut max = road_max;
+        // Center the visible road itself. Fit its recovery area separately so
+        // terrain elevation and jump clearance cannot bias the road's center.
+        let radius = track.width * 0.5 + 22.;
+        for (i, (point, ground)) in track.points.iter().zip(&track.heights).enumerate() {
+            let count = track.points.len();
+            let normal = (track.points[(i + 1) % count] - track.points[(i + count - 1) % count])
+                .unit()
+                .normal();
+            for side in [-1., 1.] {
+                let edge = *point + normal * (side * track.width * 0.5);
+                let projected = vec2(edge.x, cos * ground - sin * edge.y);
+                road_min = road_min.min(projected);
+                road_max = road_max.max(projected);
+            }
             for x in [point.x - radius, point.x + radius] {
                 for z in [point.y - radius, point.y + radius] {
                     for y in [0., ground + 10.] {
@@ -32,29 +44,14 @@ impl TrackCamera {
                 }
             }
         }
-        // Match the HUD's reserved bands in web/style.css (CSS/logical pixels).
-        let top = 180_f32.min(height * 0.30);
-        let bottom = 120_f32.min(height * 0.24);
-        let side = 24_f32.min(width * 0.04);
-        let usable_width = width - 2. * side;
-        let usable_height = height - top - bottom;
-        let size = max - min;
-        let road_extent =
-            (size.y * height / usable_height).max(size.x * height / usable_width) * 1.02;
-        // Runoff can use the outer screen around the HUD-safe circuit. Keep cars
-        // visible until recovery, including a body margin, without shrinking the
-        // road to reserve HUD bands around that entire off-track area.
-        // Expand +6 to +22: 18 units before recovery, plus car-body clearance.
-        let recovery_size = size + vec2(32., 32. * sin);
-        let edge = 4_f32.min(width.min(height) * 0.01);
-        let extent = road_extent
-            .max(recovery_size.x * height / (width - 2. * edge))
-            .max(recovery_size.y * height / (height - (top - bottom).abs() - 2. * edge));
-        let center = (min + max) * 0.5;
-        let focus_y = center.y + (top - bottom) * 0.5 * extent / height;
+        let center = (road_min + road_max) * 0.5;
+        let half_size = (center - min).max(max - center);
+        let edge = 16_f32.min(width.min(height) * 0.04);
+        let extent = (2. * half_size.x * height / (width - 2. * edge))
+            .max(2. * half_size.y * height / (height - 2. * edge));
         Self {
             key: (track.id, width, height),
-            target: vec3(center.x, 0., -focus_y / sin),
+            target: vec3(center.x, 0., -center.y / sin),
             extent,
         }
     }
@@ -65,13 +62,18 @@ impl TrackCamera {
         }
     }
 
-    pub fn camera(&self) -> Camera3D {
+    pub fn camera(&self, zoom: f32) -> Camera3D {
         let (sin, cos) = ELEVATION.sin_cos();
+        let zoom = if zoom.is_finite() {
+            zoom.clamp(0.5, 2.)
+        } else {
+            1.
+        };
         Camera3D {
             position: self.target + vec3(0., sin, cos) * 400.,
             target: self.target,
             up: Vec3::Y,
-            fovy: self.extent,
+            fovy: self.extent / zoom,
             aspect: Some(self.key.1 / self.key.2),
             projection: Projection::Orthographics,
             z_near: 0.1,
@@ -87,7 +89,7 @@ mod tests {
     use crate::sim::{Input, Race, V2};
 
     #[test]
-    fn padded_tracks_fit_hud_safe_area_at_every_aspect() {
+    fn fitted_tracks_and_recovery_stay_visible_at_every_aspect() {
         for id in 0..3 {
             let track = Track::new(id);
             for (width, height) in [
@@ -100,15 +102,15 @@ mod tests {
                 (900., 500.),
             ] {
                 let framing = TrackCamera::new(&track, width, height);
-                let camera = framing.camera();
+                let camera = framing.camera(1.);
                 let half = framing.extent * 0.5;
                 let right = half * width / height;
                 let matrix = Mat4::orthographic_rh_gl(-right, right, -half, half, 0.1, 1500.)
                     * Mat4::look_at_rh(camera.position, camera.target, camera.up);
-                let side = 24_f32.min(width * 0.04);
-                let top = 180_f32.min(height * 0.30);
-                let bottom = 120_f32.min(height * 0.24);
-                let radius = track.width * 0.5 + 6.;
+                let border = 16_f32.min(width.min(height) * 0.04);
+                let radius = track.width * 0.5 + 22.;
+                let mut frame_min = Vec2::splat(f32::INFINITY);
+                let mut frame_max = Vec2::splat(f32::NEG_INFINITY);
                 for (point, ground) in track.points.iter().zip(&track.heights) {
                     for x in [point.x - radius, point.x + radius] {
                         for z in [point.y - radius, point.y + radius] {
@@ -117,20 +119,27 @@ mod tests {
                                 let pixel =
                                     vec2((p.x + 1.) * width * 0.5, (1. - p.y) * height * 0.5);
                                 assert!(
-                                    pixel.x >= side && pixel.x <= width - side,
+                                    pixel.x >= border - 0.01 && pixel.x <= width - border + 0.01,
                                     "track {id}: {pixel:?}"
                                 );
                                 assert!(
-                                    pixel.y >= top && pixel.y <= height - bottom,
+                                    pixel.y >= border - 0.01 && pixel.y <= height - border + 0.01,
                                     "track {id}: {pixel:?}"
                                 );
                                 assert!(p.z > -1. && p.z < 1.);
+                                frame_min = frame_min.min(pixel);
+                                frame_max = frame_max.max(pixel);
                             }
                         }
                     }
                 }
-                // The visible road should fill at least one available dimension,
-                // rather than fitting a large, mostly empty off-track envelope.
+                // Fit must use all available space along at least one edge.
+                let clearance = frame_min
+                    .x
+                    .min(frame_min.y)
+                    .min(width - frame_max.x)
+                    .min(height - frame_max.y);
+                assert!((clearance - border).abs() < 0.02);
                 let mut road_min = Vec2::splat(f32::INFINITY);
                 let mut road_max = Vec2::splat(f32::NEG_INFINITY);
                 for (i, point) in track.points.iter().enumerate() {
@@ -159,17 +168,38 @@ mod tests {
                         }
                     }
                 }
-                let road_size = road_max - road_min;
-                let fill =
-                    (road_size.x / (width - 2. * side)).max(road_size.y / (height - top - bottom));
-                // Portrait can be limited by keeping the full recovery area on
-                // screen; landscape should fill the tighter HUD-safe height.
-                let minimum_fill = if width < height { 0.83 } else { 0.85 };
+                let center = (road_min + road_max) * 0.5;
                 assert!(
-                    fill >= minimum_fill,
-                    "track {id} at {width}x{height}: road fills {:.1}%",
-                    fill * 100.
+                    (center - vec2(width, height) * 0.5).length() < 0.02,
+                    "track {id} at {width}x{height}: road center {center:?}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn zoom_changes_scale_without_moving_the_center_and_clamps_limits() {
+        for id in 0..3 {
+            let track = Track::new(id);
+            for (width, height) in [(1440., 900.), (600., 900.), (320., 568.)] {
+                let framing = TrackCamera::new(&track, width, height);
+                let fitted = framing.camera(1.);
+                for zoom in [0.5, 0.9, 1., 1.5, 2.] {
+                    let camera = framing.camera(zoom);
+                    assert_eq!(camera.position, fitted.position);
+                    assert_eq!(camera.target, fitted.target);
+                    assert!((camera.fovy * zoom - fitted.fovy).abs() < 0.001);
+                    let half = camera.fovy * 0.5;
+                    let right = half * width / height;
+                    let matrix = Mat4::orthographic_rh_gl(-right, right, -half, half, 0.1, 1500.)
+                        * Mat4::look_at_rh(camera.position, camera.target, camera.up);
+                    let center = matrix.project_point3(framing.target);
+                    assert!(center.x.abs() < 0.00001 && center.y.abs() < 0.00001);
+                }
+                assert_eq!(framing.camera(0.).fovy, framing.camera(0.5).fovy);
+                assert_eq!(framing.camera(3.).fovy, framing.camera(2.).fovy);
+                assert_eq!(framing.camera(f32::NAN).fovy, fitted.fovy);
+                assert_eq!(framing.camera(f32::INFINITY).fovy, fitted.fovy);
             }
         }
     }
@@ -196,7 +226,7 @@ mod tests {
             }
             framing.update(&race.track, 1440., 900.);
             assert_eq!(framing, original);
-            assert_eq!(framing.camera().position, original.camera().position);
+            assert_eq!(framing.camera(1.).position, original.camera(1.).position);
         }
         framing.update(&race.track, 600., 900.);
         assert_ne!(framing, original);

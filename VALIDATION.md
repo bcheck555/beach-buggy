@@ -1,5 +1,15 @@
 # Validation — October 19, 2026
 
+## Centered viewport and manual zoom — October 21, 2026
+
+- Whole-track mode now centers the projected road bounds on the viewport midpoint. Fit uses the full viewport with a small border and includes recovery clearance. Manual zoom scales around the same center; enlarged views may intentionally crop the circuit.
+- Browser/WASM option 10 supplies the zoom multiplier. Per-track `trackZoom` percentages persist independently; shortcuts and HUD/pause buttons support 50–200% in 10-point steps, with 0/Fit restoring 100%.
+- `npm run check` passed formatting, native/WASM Clippy, JavaScript syntax, and all 22 Rust tests. Camera tests cover centered road bounds and Fit/recovery visibility across seven viewport sizes, scale/center invariance and limits, and unchanged framing during driving/reset. Release build passed.
+- Chromium full suite: 19 passed. After final layout/contrast refinements, all nine affected camera/zoom regressions passed again. Firefox headed under Xvfb: full 19-test suite passed against final code/styles.
+- Browser coverage includes per-track persistence, legacy/invalid entries, blocked storage, button/keyboard equivalence, modifier/repeat/editable-field exclusions, focus, zoom limits, and HUD geometry at 320×568, 381×568, and 600×900. Actual WebGL checks verify zoom scale, fixed viewport-center world point, resize multiplier retention, reset, and restart persistence.
+- All 24 Fit/150% track captures across three circuits, desktop/narrow viewports, and Chromium/Firefox were visually inspected. Controls remain readable; Fit shows complete roads, while enlarged cropping is intentional. Captures are under `test-results/manual-zoom-chromium-final/` and `test-results/manual-zoom-firefox/`.
+- Two agents using the inherited session model handled browser implementation/testing and independent review. Review found a keyboard-event target guard and narrow HUD overlaps; screenshot review found button contrast. All were corrected, regression-covered, and rechecked before committing.
+
 ## Tighter whole-track framing — October 21, 2026
 
 - Reduced circuit padding and reserved HUD bands to enlarge the road. Fit the recovery envelope separately to the full viewport, preserving off-track car visibility.

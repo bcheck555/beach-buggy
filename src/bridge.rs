@@ -51,7 +51,7 @@ pub fn option(index: i32) -> f32 {
     #[cfg(not(target_arch = "wasm32"))]
     {
         match index {
-            6 | 7 => 1.,
+            6 | 7 | 10 => 1.,
             _ => 0.,
         }
     }
