@@ -1,5 +1,14 @@
 # Validation — October 19, 2026
 
+## Volcano Run and smooth scenery — October 22, 2026
+
+- Track 3 now uses a uniformly sampled course with two western braking hairpins, an elevated crossing, and a lower basalt tunnel. Shared section metadata drives surfaces, barriers, AI, checkpoint height checks, reset placement, standings, and road-projected effects. Tracks 1 and 2 retain their driving layouts and handling; only track 3 receives fresh record keys (200–211).
+- Final `npm run check` passed formatting, native/WASM Clippy with warnings denied, JavaScript syntax, all 27 library tests, and all five renderer tests. Release build passed. Matrices cover 36 solo configurations and 108 complete six-car grids across rival difficulties. The longer Volcano course uses a larger simulated-time allowance; original-course limits stay unchanged.
+- All 24 hairpin/car/preset comparisons start at achievable full-throttle equilibrium speeds using the actual drive/drag law. Braked runs must reach the exit three samples beyond the apex while staying on-road; full-throttle runs must overshoot the road edge. Separate regressions cover crossing levels/collisions, wrong-height gates, reset/reverse progress, tunnel boundaries, and minimum curve radius.
+- Five renderer tests pass, covering triangle-preserving batching, vertex/index budgets, continuous-island runoff, exact volcano/lava clearance above the upper road, and convex camera-cutaway clipping. Native/WASM Clippy and formatting passed again after final renderer refinements.
+- Full Chromium and Firefox suites: 22 tests passed per browser. After final visual refinements, the three affected framing/record/tunnel cases passed again in both browsers. Center captures pause through the UI in the triggering animation frame and assert the car stays within 12 m of the crossing; this avoids accelerated-demo movement during browser round trips. Captures cover tunnel entrances/exits, both cameras/detail levels, desktop/narrow viewports, and Rocky Coast. Representative captures were visually inspected in both browsers; final volcano captures are under `test-results/chromium-final/` and `test-results/firefox-volcano-final/`.
+- Three agents using the inherited session model handled simulation, rendering, and independent review. Review found reverse standings wrap and a folded hairpin ribbon; both were corrected and regression-covered. Screenshot review prompted smoother road subdivision and coherent tunnel roof cutaways. Software-rendered browser samples do not establish performance on representative GPU hardware.
+
 ## Centered viewport and manual zoom — October 21, 2026
 
 - Whole-track mode now centers the projected road bounds on the viewport midpoint. Fit uses the full viewport with a small border and includes recovery clearance. Manual zoom scales around the same center; enlarged views may intentionally crop the circuit.

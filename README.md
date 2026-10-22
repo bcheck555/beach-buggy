@@ -36,8 +36,8 @@ Use mouse or keyboard Tab/Enter for garage and pause menus. Connect a standard-m
 ## Tracks, cars, and modes
 
 - **Beach Loop:** Wide sandy turns and a launch ramp; a good starting point.
-- **Rocky Coast:** Narrower elevated terrain, rock surfaces, and railings.
-- **Lagoon Run:** A central lagoon, wooden bridges with more grip, tight turns, and a ramp.
+- **Rocky Coast:** Narrower elevated terrain, rock surfaces, and railings, with sculpted shores and rounded coastal rocks.
+- **Volcano Run:** The skill course: linked curves, two braking hairpins, an outer climb, and an elevated crossing above a tunnel through a volcano. Brake before the marked corners; runoff gives room to recover. The volcano opens a cutaway while you drive beneath it so your car and halo stay visible in either camera view. Tunnel walls and elevated barriers remain active at both scenery settings. The crater and lava are scenery, without damage.
 
 **Sunrunner** balances grip and power. **Sand Flea** is light and responsive. **Riptide** accelerates hardest but needs careful throttle and braking. **Dune Hauler** is heavy, stable, and loses less traction off-road.
 
@@ -53,7 +53,7 @@ Use mouse or keyboard Tab/Enter for garage and pause menus. Connect a standard-m
 
 Best completed laps are saved by track/car/physics combination in the browser's local storage and shared across both modes. Settings persist too. No account or server is required; private mode or blocked storage still permits play without saving. Clearing site data clears records.
 
-Results highlight a new personal best and the improvement over the record held when the race started. Existing records remain compatible: the showcase update preserves the drivable layout, checkpoints, vehicle handling, and record keys.
+Results highlight a new personal best and the improvement over the record held when the race started. Beach Loop and Rocky Coast retain their records. Volcano Run uses fresh record keys because its layout replaces Lagoon Run; old Lagoon Run records remain stored but are not used for the new course. Existing car, driving feel, camera, and track selections remain compatible.
 
 ## Development and validation
 
@@ -73,7 +73,7 @@ xvfb-run -a npm run test:firefox -- --headed
 
 Firefox's headless WebGL support depends on the host drivers; Xvfb provides the display used in validation. On hosts without an audio output device, the Firefox test verifies graph initialization and graceful operation rather than audible output. Chromium tests require a running audio context. Browser tests emulate a standard controller; physical controller hardware still benefits from a local check.
 
-The 22 Rust tests cover all **36 track/car/preset combinations**, **108 complete six-car grids** across rival difficulties, 27 stationary-start avoidance configurations, blocked passing, side-by-side racing, difficulty/handling isolation, feedback/reset state, ordered and directional checkpoints, out-of-bounds gate rejection, lap/finish/standings rules, record keys, acceleration, steering profiles, braking/reverse, tire slip/handbrake, suspension launch/landing, collision momentum, render-rate independence, centered circuit/recovery framing, and zoom limits and scale across aspect ratios. The 19 browser tests per browser cover garage persistence, legacy saves, quality/reduced-motion/camera settings, keyboard/gamepad input, disconnect fallback, sound initialization, pause/reset/restart, complete races and trials, storage errors, per-track zoom persistence, shortcut exclusions, narrow HUD layout, Fit/enlarged whole-track captures, and 1080p captures. Isolated presentation tests inject telemetry to check lap/landing/PB messages, camera controls, and audio gains; actual race completion and renderer projection checks use the simulation.
+`npm run check` runs 27 simulation/camera tests and five renderer tests. They cover all **36 track/car/preset combinations**, **108 complete six-car grids** across rival difficulties, traffic behavior, feedback/reset state, ordered checkpoints, standings, records, braking, suspension, collisions, and camera framing/zoom. Volcano regressions additionally check crossing levels, recovery, tunnel boundaries, full braking approaches/exits, terrain clearance, cutaway clipping, and geometry budgets. Browser tests cover garage persistence, legacy saves, quality/reduced-motion/camera settings, keyboard/gamepad input, sound, pause/reset/restart, complete races and trials, record isolation, per-track zoom, narrow HUD layout, and renderer captures. Isolated presentation tests inject telemetry to check messages, controls, and audio gains; race completion and renderer projection checks use the simulation.
 
 `?autodrive=1` enables an accelerated demo driver for browser race-completion tests. It drives through the same simulation and checkpoints and **never saves personal records**. It is intentionally absent from the regular UI.
 

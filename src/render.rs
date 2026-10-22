@@ -7,6 +7,25 @@ fn rgb(r: u8, g: u8, b: u8) -> Color {
 fn p3(p: V2, h: f32) -> Vec3 {
     vec3(p.x, h, p.y)
 }
+
+fn road_sample(track: &Track, sample: f32) -> (V2, f32, V2) {
+    let index = sample.floor() as usize % SAMPLES;
+    let t = sample.fract();
+    let at = |offset: usize| track.points[(index + SAMPLES + offset - 1) % SAMPLES];
+    let (a, b, c, d) = (at(0), at(1), at(2), at(3));
+    let height = track.heights[index] * (1. - t) + track.heights[(index + 1) % SAMPLES] * t;
+    if track.id == 0 {
+        let point = b.lerp(c, t);
+        let direction = (c - a).unit().lerp((d - b).unit(), t).unit();
+        return (point, height, direction);
+    }
+    // Subdivide the existing route, retaining its original sample positions and elevations.
+    let quadratic = a * 2. - b * 5. + c * 4. - d;
+    let cubic = (b - c) * 3. + d - a;
+    let point = (b * 2. + (c - a) * t + quadratic * (t * t) + cubic * (t * t * t)) * 0.5;
+    let direction = ((c - a) + quadratic * (2. * t) + cubic * (3. * t * t)).unit();
+    (point, height, direction)
+}
 fn shade(c: Color, v: f32) -> Color {
     Color::new(c.r * v, c.g * v, c.b * v, c.a)
 }
@@ -78,6 +97,365 @@ fn triangle(mesh: &mut Mesh, points: [Vec3; 3], color: Color) {
     mesh.indices.extend([base, base + 1, base + 2]);
 }
 
+// Split by whole triangles: vertex windows can silently discard faces crossing a boundary.
+fn batches(mesh: Mesh) -> Vec<Mesh> {
+    let mut result = Vec::new();
+    let mut batch = empty();
+    for face in mesh.indices.chunks_exact(3) {
+        if batch.vertices.len() + 3 > 3000 {
+            result.push(batch);
+            batch = empty();
+        }
+        let base = batch.vertices.len() as u16;
+        batch
+            .vertices
+            .extend(face.iter().map(|&i| mesh.vertices[i as usize]));
+        batch.indices.extend([base, base + 1, base + 2]);
+    }
+    if !batch.indices.is_empty() {
+        result.push(batch);
+    }
+    result
+}
+
+fn rounded_rock(mesh: &mut Mesh, center: Vec3, size: Vec3, color: Color) {
+    for row in 0..6 {
+        for column in 0..12 {
+            let point = |r: usize, c: usize| {
+                let latitude = r as f32 * std::f32::consts::PI / 6.;
+                let longitude = c as f32 * std::f32::consts::TAU / 12.;
+                center
+                    + vec3(
+                        latitude.sin() * longitude.cos(),
+                        latitude.cos(),
+                        latitude.sin() * longitude.sin(),
+                    ) * size
+            };
+            quad(
+                mesh,
+                [
+                    point(row, column),
+                    point(row + 1, column),
+                    point(row + 1, column + 1),
+                    point(row, column + 1),
+                ],
+                shade(
+                    color,
+                    0.78 + row as f32 * 0.025 + (column as f32 * 0.35).cos() * 0.08,
+                ),
+            );
+        }
+    }
+}
+
+// Clip against a world-space plane, retaining its positive half-space. Intersections
+// share the exact plane, so adjacent volcano faces form a continuous road cutting.
+fn clip_polygon(points: &[Vec3], normal: Vec3, offset: f32) -> Vec<Vec3> {
+    let mut clipped = Vec::new();
+    if points.is_empty() {
+        return clipped;
+    }
+    for i in 0..points.len() {
+        let a = points[i];
+        let b = points[(i + 1) % points.len()];
+        let da = normal.dot(a) + offset;
+        let db = normal.dot(b) + offset;
+        if da >= 0. {
+            clipped.push(a);
+        }
+        if (da >= 0.) != (db >= 0.) {
+            clipped.push(a.lerp(b, da / (da - db)));
+        }
+    }
+    clipped
+}
+
+fn polygon(mesh: &mut Mesh, points: &[Vec3], color: Color) {
+    for i in 1..points.len().saturating_sub(1) {
+        // Keep six-index primitive groups for the camera cutaway and batch splitter.
+        quad(
+            mesh,
+            [points[0], points[i], points[i + 1], points[i + 1]],
+            color,
+        );
+    }
+}
+
+fn volcano_face(mesh: &mut Mesh, points: &[Vec3], color: Color, width: f32) {
+    let upper = vec3(0.8, 0., 1.).normalize();
+    let lower = vec3(-0.8, 0., 1.).normalize();
+    let high = clip_polygon(points, Vec3::Y, -11.);
+    let upper_pieces = [
+        clip_polygon(points, -Vec3::Y, 11.),
+        clip_polygon(&high, upper, -width),
+        clip_polygon(&high, -upper, -width),
+    ];
+    for piece in upper_pieces {
+        let low = clip_polygon(&piece, -Vec3::Y, 9.3);
+        for part in [
+            clip_polygon(&piece, Vec3::Y, -9.3),
+            clip_polygon(&low, lower, -9.9),
+            clip_polygon(&low, -lower, -9.9),
+        ] {
+            polygon(mesh, &part, color);
+        }
+    }
+}
+
+fn sightline_cutaway(points: &[Vec3], player: Vec3, sight: Vec3) -> Vec<Vec<Vec3>> {
+    let mut visible = vec![clip_polygon(points, -Vec3::Y, player.y + 0.7)];
+    let high = clip_polygon(points, Vec3::Y, -player.y - 0.7);
+    visible.push(clip_polygon(&high, -sight, player.dot(sight)));
+    let mut inside = clip_polygon(&high, sight, -player.dot(sight));
+    let right = sight.cross(Vec3::Y).normalize_or_zero();
+    let right = if right.length_squared() < 0.1 {
+        Vec3::X
+    } else {
+        right
+    };
+    let up = right.cross(sight).normalize();
+    // Subtract a convex twelve-sided visibility shaft. Plane intersections produce
+    // smooth shared boundaries rather than jagged deleted triangles around the car.
+    for side in 0..12 {
+        let angle = side as f32 * std::f32::consts::TAU / 12.;
+        let radial = right * angle.cos() + up * angle.sin();
+        visible.push(clip_polygon(&inside, radial, -8. - radial.dot(player)));
+        inside = clip_polygon(&inside, -radial, 8. + radial.dot(player));
+        if inside.is_empty() {
+            break;
+        }
+    }
+    visible
+}
+
+fn draw_polygon(mesh: &mut Mesh, points: &[Vec3], template: Vertex) {
+    for i in 1..points.len().saturating_sub(1) {
+        if mesh.vertices.len() + 3 > 3000 {
+            draw_mesh(mesh);
+            mesh.vertices.clear();
+            mesh.indices.clear();
+        }
+        let base = mesh.vertices.len() as u16;
+        for point in [points[0], points[i], points[i + 1]] {
+            let mut vertex = template;
+            vertex.position = point;
+            mesh.vertices.push(vertex);
+        }
+        mesh.indices.extend([base, base + 1, base + 2]);
+    }
+}
+
+fn volcano(track: &Track, walls: &mut Mesh, cover: &mut Mesh, tunnel_roof: &mut Vec<Mesh>) {
+    // Rounded concentric slopes surround an inset glowing crater. Road corridors remain open.
+    let rings = [
+        (18., 25.),
+        (21., 28.),
+        (25., 24.),
+        (29., 15.),
+        (35., 5.),
+        (39., -0.1),
+    ];
+    for pair in rings.windows(2) {
+        for sector in 0..72 {
+            let point = |ring: (f32, f32), k: usize| {
+                let a = k as f32 * std::f32::consts::TAU / 72.;
+                vec3(a.cos() * ring.0, ring.1, a.sin() * ring.0)
+            };
+            let points = [
+                point(pair[0], sector),
+                point(pair[1], sector),
+                point(pair[1], sector + 1),
+                point(pair[0], sector + 1),
+            ];
+            volcano_face(
+                cover,
+                &points,
+                shade(
+                    rgb(112, 119, 111),
+                    0.84 + (sector as f32 * std::f32::consts::TAU / 72. - 0.5).cos() * 0.16,
+                ),
+                track.width * 0.5 + 3.,
+            );
+        }
+    }
+    for sector in 0..48 {
+        let a = sector as f32 * std::f32::consts::TAU / 48.;
+        let b = (sector + 1) as f32 * std::f32::consts::TAU / 48.;
+        for radial in 0..4 {
+            let inner = radial as f32 * 4.5;
+            let outer = inner + 4.5;
+            let points = [
+                vec3(a.cos() * inner, 24.8, a.sin() * inner),
+                vec3(a.cos() * outer, 24.8, a.sin() * outer),
+                vec3(b.cos() * outer, 24.8, b.sin() * outer),
+                vec3(b.cos() * inner, 24.8, b.sin() * inner),
+            ];
+            volcano_face(cover, &points, rgb(245, 117, 58), track.width * 0.5 + 3.);
+        }
+    }
+    for i in 0..SAMPLES {
+        if !track.section(i).tunnel {
+            continue;
+        }
+        let j = (i + 1) % SAMPLES;
+        let normal = |k: usize| {
+            (track.points[(k + 1) % SAMPLES] - track.points[(k + SAMPLES - 1) % SAMPLES])
+                .unit()
+                .normal()
+        };
+        let (a, b, n, m) = (track.points[i], track.points[j], normal(i), normal(j));
+        let w = track.width * 0.5 + 0.9;
+        let mut roof = empty();
+        // Elliptical arch has full vehicle clearance throughout the drivable width.
+        for arc in 0..16 {
+            let vertex = |p: V2, n: V2, h: f32, k: usize, outer: bool| {
+                let angle = k as f32 * std::f32::consts::PI / 16.;
+                p3(
+                    p + n * (angle.cos() * (w + if outer { 1.5 } else { 0. })),
+                    h + 2.5 + angle.sin() * (6. + if outer { 1.5 } else { 0. }),
+                )
+            };
+            for outer in [false, true] {
+                quad(
+                    &mut roof,
+                    [
+                        vertex(a, n, track.heights[i], arc, outer),
+                        vertex(b, m, track.heights[j], arc, outer),
+                        vertex(b, m, track.heights[j], arc + 1, outer),
+                        vertex(a, n, track.heights[i], arc + 1, outer),
+                    ],
+                    if outer {
+                        rgb(125, 130, 119)
+                    } else {
+                        rgb(66, 89, 91)
+                    },
+                );
+            }
+            if !track.section((i + SAMPLES - 1) % SAMPLES).tunnel || !track.section(j).tunnel {
+                let (p, n, h) = if !track.section(j).tunnel {
+                    (b, m, track.heights[j])
+                } else {
+                    (a, n, track.heights[i])
+                };
+                quad(
+                    &mut roof,
+                    [
+                        vertex(p, n, h, arc, false),
+                        vertex(p, n, h, arc, true),
+                        vertex(p, n, h, arc + 1, true),
+                        vertex(p, n, h, arc + 1, false),
+                    ],
+                    rgb(177, 166, 141),
+                );
+            }
+        }
+        tunnel_roof.push(roof);
+        for side in [-1., 1.] {
+            quad(
+                walls,
+                [
+                    p3(a + n * w * side, track.heights[i]),
+                    p3(b + m * w * side, track.heights[j]),
+                    p3(b + m * w * side, track.heights[j] + 2.5),
+                    p3(a + n * w * side, track.heights[i] + 2.5),
+                ],
+                rgb(73, 93, 91),
+            );
+            if i % 3 == 0 {
+                append(
+                    walls,
+                    box_mesh(
+                        p3(a + n * (w - 0.12) * side, track.heights[i] + 1.8),
+                        vec3(0.18, 0.35, 0.6),
+                        Quat::IDENTITY,
+                        rgb(255, 220, 140),
+                    ),
+                );
+                ring(
+                    walls,
+                    p3(a + n * (w - 1.) * side, track.heights[i] + 0.055),
+                    0.25,
+                    0.16,
+                    rgb(242, 198, 101),
+                );
+            }
+        }
+    }
+}
+
+fn skill_markers(track: &Track, props: &mut Mesh, road: &mut Mesh) {
+    let tangent = |i: usize| {
+        (track.points[(i + 1) % SAMPLES] - track.points[(i + SAMPLES - 1) % SAMPLES]).unit()
+    };
+    for apex in [V2::new(-84., 42.), V2::new(-84., -42.)] {
+        let bend = track.nearest(apex).index;
+        let before = tangent((bend + SAMPLES - 1) % SAMPLES);
+        let after = tangent((bend + 1) % SAMPLES);
+        let direction = angle_diff(after.y.atan2(after.x), before.y.atan2(before.x)).signum();
+        for (marker, offset) in [8, 5, 2].into_iter().enumerate() {
+            let i = (bend + SAMPLES - offset) % SAMPLES;
+            let (t, n) = (tangent(i), tangent(i).normal());
+            let p = track.points[i];
+            let h = track.heights[i];
+            // Three bright slowing bars lead into each hairpin; fewer bars near the apex.
+            for stripe in 0..3 - marker {
+                let center = p - t * (stripe as f32 * 1.1);
+                quad(
+                    road,
+                    [
+                        p3(center - n * (track.width * 0.42), h + 0.065),
+                        p3(center + n * (track.width * 0.42), h + 0.065),
+                        p3(center + n * (track.width * 0.42) + t * 0.3, h + 0.065),
+                        p3(center - n * (track.width * 0.42) + t * 0.3, h + 0.065),
+                    ],
+                    rgb(255, 224, 151),
+                );
+            }
+        }
+        for offset in [0, 2, 4] {
+            let i = (bend + offset) % SAMPLES;
+            let t = tangent(i);
+            let n = t.normal();
+            let center = p3(
+                track.points[i] - n * direction * (track.width * 0.5 + 2.5),
+                track.heights[i] + 2.5,
+            );
+            let across = p3(t, 0.);
+            append(
+                props,
+                box_mesh(
+                    center - Vec3::Y * 1.1,
+                    vec3(0.22, 3.2, 0.22),
+                    Quat::IDENTITY,
+                    rgb(99, 111, 99),
+                ),
+            );
+            quad(
+                props,
+                [
+                    center - across * 1.8 - Vec3::Y,
+                    center + across * 1.8 - Vec3::Y,
+                    center + across * 1.8 + Vec3::Y,
+                    center - across * 1.8 + Vec3::Y,
+                ],
+                rgb(41, 72, 73),
+            );
+            for shift in [-0.8, 0.8] {
+                let c = center + across * shift - p3(n * direction, 0.) * 0.04;
+                triangle(
+                    props,
+                    [
+                        c - across * 0.5 - Vec3::Y * 0.7,
+                        c + across * 0.5,
+                        c - across * 0.5 + Vec3::Y * 0.7,
+                    ],
+                    rgb(255, 224, 151),
+                );
+            }
+        }
+    }
+}
+
 fn ring(mesh: &mut Mesh, center: Vec3, radius: f32, width: f32, color: Color) {
     for i in 0..32 {
         let a = i as f32 * std::f32::consts::TAU / 32.;
@@ -132,10 +510,10 @@ fn coast_point(i: usize) -> V2 {
     V2::new(angle.cos() * 111., angle.sin() * 104.) * ripple
 }
 
-fn coastal_island(land: &mut Mesh, shallows: &mut Mesh, foam: &mut Mesh) {
+fn coastal_island(land: &mut Mesh, shallows: &mut Mesh, foam: &mut Mesh, scale: f32) {
     for i in 0..96 {
-        let a = coast_point(i);
-        let b = coast_point((i + 1) % 96);
+        let a = coast_point(i) * scale;
+        let b = coast_point((i + 1) % 96) * scale;
         triangle(
             land,
             [
@@ -338,6 +716,11 @@ pub struct Scenery {
     shallows: Mesh,
     foam: Mesh,
     showcase: bool,
+    cover: Vec<Mesh>,
+    crossing: Vec<Mesh>,
+    reveal: Mesh,
+    tunnel_roof: Vec<Mesh>,
+    coast_scale: f32,
 }
 impl Scenery {
     pub fn new(track: &Track) -> Self {
@@ -346,57 +729,36 @@ impl Scenery {
         let mut props = empty();
         let mut shallows = empty();
         let mut foam = empty();
-        if track.id == 0 {
-            coastal_island(&mut land, &mut shallows, &mut foam);
-        }
-        // Individual tiles create a faceted island silhouette and gentle sand variation.
-        for x in -12i32..12 {
-            for z in -12i32..12 {
-                let p = V2::new(x as f32 * 10. + 5., z as f32 * 10. + 5.);
-                let r = track.nearest(p);
-                let island = (p.x / 110.).powi(2) + (p.y / 106.).powi(2) < 1.
-                    || r.distance < track.width * 0.5 + 6.;
-                let lagoon = track.id == 2
-                    && ((r.distance > track.width * 0.5 + 3.
-                        && (p.x / 43.).powi(2) + (p.y / 48.).powi(2) < 1.)
-                        || ((20..38).contains(&r.index) && r.distance < track.width));
-                if track.id != 0 && island && !lagoon {
-                    let h = -0.12;
-                    let c = if r.distance > 27. && p.len() < 65. {
-                        rgb(139, 176 + (x * z).unsigned_abs() as u8 % 16, 112)
-                    } else {
-                        rgb(230 + (x + z).unsigned_abs() as u8 % 12, 207, 156)
-                    };
-                    let a = vec3(p.x - 5., h, p.y - 5.);
-                    let b = vec3(p.x + 5., h, p.y - 5.);
-                    let c1 = vec3(p.x + 5., h, p.y + 5.);
-                    let d = vec3(p.x - 5., h, p.y + 5.);
-                    quad(&mut land, [a, b, c1, d], c);
-                }
-            }
-        }
-        for i in 0..SAMPLES {
-            let j = (i + 1) % SAMPLES;
+        let mut cover = empty();
+        let mut crossing = empty();
+        let mut tunnel_roof = Vec::new();
+        let coast_scale = if track.id == 2 { 1.35 } else { 1. };
+        coastal_island(&mut land, &mut shallows, &mut foam, coast_scale);
+        let subdivisions = if track.id == 0 { 1 } else { 6 };
+        for sample in 0..SAMPLES * subdivisions {
+            let i = sample / subdivisions;
+            let (a, h, t) = road_sample(track, sample as f32 / subdivisions as f32);
+            let (b, hj, tj) = road_sample(track, (sample + 1) as f32 / subdivisions as f32);
             let tangent = |k: usize| {
                 (track.points[(k + 1) % SAMPLES] - track.points[(k + SAMPLES - 1) % SAMPLES]).unit()
             };
-            let normal = tangent(i).normal();
-            let normal_j = tangent(j).normal();
-            let a = track.points[i];
-            let b = track.points[j];
-            let h = track.heights[i];
-            let hj = track.heights[j];
+            let normal = t.normal();
+            let normal_j = tj.normal();
             let w = track.width * 0.5;
-            let bridge = track.id == 2 && (20..38).contains(&i);
+            let section = track.section(i);
+            let bridge = section.elevated;
             let c = if bridge {
-                rgb(155 + (i % 2) as u8 * 12, 117, 81)
+                rgb(154, 150, 138)
+            } else if section.tunnel {
+                rgb(119, 139, 133)
             } else if track.id == 1 {
                 rgb(167 + (i % 3) as u8 * 3, 156, 141)
             } else {
                 rgb(211 + (i % 3) as u8 * 3, 179, 123)
             };
+            let deck = if bridge { &mut crossing } else { &mut road };
             quad(
-                &mut road,
+                deck,
                 [
                     p3(a - normal * w, h),
                     p3(a + normal * w, h),
@@ -407,7 +769,7 @@ impl Scenery {
             );
             // Sloping shoulders seal elevation gaps between road and island.
             for side in [-1., 1.] {
-                if !bridge {
+                if !bridge && !section.tunnel {
                     quad(
                         &mut road,
                         [
@@ -421,7 +783,7 @@ impl Scenery {
                 }
                 let edge = if track.id == 0 { 0.52 } else { 0.28 };
                 quad(
-                    &mut road,
+                    if bridge { &mut crossing } else { &mut road },
                     [
                         p3(a + normal * ((w - edge) * side), h + 0.04),
                         p3(a + normal * (w * side), h + 0.04),
@@ -434,27 +796,61 @@ impl Scenery {
                         rgb(226, 109, 73)
                     },
                 );
-                if (track.id == 1 || bridge) && i % 2 == 0 {
+                if section.barrier && !section.tunnel {
                     let p = p3(a + normal * ((w + 1.) * side), h + 0.7);
-                    append(
-                        &mut props,
-                        box_mesh(p, vec3(0.35, 1.4, 0.35), Quat::IDENTITY, rgb(116, 98, 78)),
-                    );
+                    if sample % subdivisions == 0 {
+                        append(
+                            if bridge { &mut crossing } else { &mut props },
+                            box_mesh(p, vec3(0.35, 1.4, 0.35), Quat::IDENTITY, rgb(116, 98, 78)),
+                        );
+                    }
                     let mid = (p3(a + normal * ((w + 1.) * side), h + 1.1)
                         + p3(b + normal_j * ((w + 1.) * side), hj + 1.1))
                         * 0.5;
                     append(
-                        &mut props,
+                        if bridge { &mut crossing } else { &mut props },
                         box_mesh(
                             mid,
                             vec3((b - a).len() + 0.4, 0.18, 0.18),
-                            Quat::from_rotation_y(-tangent(i).y.atan2(tangent(i).x)),
+                            Quat::from_rotation_y(-(b - a).y.atan2((b - a).x)),
                             rgb(239, 216, 166),
                         ),
                     );
                 }
             }
-            if i == 0 {
+            if bridge {
+                quad(
+                    &mut crossing,
+                    [
+                        p3(a - normal * w, h - 0.65),
+                        p3(b - normal_j * w, hj - 0.65),
+                        p3(b + normal_j * w, hj - 0.65),
+                        p3(a + normal * w, h - 0.65),
+                    ],
+                    rgb(93, 105, 101),
+                );
+                for side in [-1., 1.] {
+                    quad(
+                        &mut crossing,
+                        [
+                            p3(a + normal * w * side, h),
+                            p3(b + normal_j * w * side, hj),
+                            p3(b + normal_j * w * side, hj - 0.65),
+                            p3(a + normal * w * side, h - 0.65),
+                        ],
+                        rgb(129, 135, 124),
+                    );
+                    if i % 5 == 0 && sample % subdivisions == 0 {
+                        rounded_rock(
+                            &mut props,
+                            p3(a + normal * (w + 1.7) * side, h * 0.5 - 0.4),
+                            vec3(1.1, h * 0.5, 1.1),
+                            rgb(129, 135, 124),
+                        );
+                    }
+                }
+            }
+            if sample == 0 {
                 for row in 0..2 {
                     for cell in 0..12 {
                         let f = (cell as f32 / 12. - 0.5) * track.width;
@@ -500,38 +896,26 @@ impl Scenery {
             if i % 4 < 2 && track.id == 0 {
                 palm(&mut props, p, 0.8 + random() * 0.3, i as f32);
             } else if i % 4 < 2 {
-                append(
-                    &mut props,
-                    box_mesh(
-                        vec3(x, 2.7, z),
-                        vec3(0.5, 5.4, 0.5),
-                        Quat::from_rotation_z(0.13),
-                        rgb(137, 104, 70),
-                    ),
-                );
-                for k in 0..5 {
-                    let angle = k as f32 * std::f32::consts::TAU / 5.;
-                    let rotation = Quat::from_rotation_y(angle) * Quat::from_rotation_z(0.2);
+                palm(&mut props, p, 0.9 + random() * 0.3, i as f32);
+            } else if i % 4 == 2 {
+                if track.id == 0 {
                     append(
                         &mut props,
                         box_mesh(
-                            vec3(x + angle.cos() * 1.2, 5.1, z - angle.sin() * 1.2),
-                            vec3(3.9, 0.18, 0.9),
-                            rotation,
-                            rgb(57, 130 + (i % 25) as u8, 98),
+                            vec3(x, 0.8, z),
+                            vec3(2.5, 1.6, 2.),
+                            Quat::from_rotation_y(i as f32),
+                            rgb(154, 157, 145),
                         ),
                     );
-                }
-            } else if i % 4 == 2 {
-                append(
-                    &mut props,
-                    box_mesh(
+                } else {
+                    rounded_rock(
+                        &mut props,
                         vec3(x, 0.8, z),
                         vec3(2.5, 1.6, 2.),
-                        Quat::from_rotation_y(i as f32),
                         rgb(154, 157, 145),
-                    ),
-                );
+                    );
+                }
             } else {
                 append(
                     &mut props,
@@ -559,6 +943,9 @@ impl Scenery {
         }
         if track.id == 0 {
             showcase_landmarks(track, &mut props, &mut road);
+        } else if track.id == 2 {
+            volcano(track, &mut props, &mut cover, &mut tunnel_roof);
+            skill_markers(track, &mut props, &mut road);
         }
         // A finish gantry frames the grid.
         let (p, t) = track.checkpoint(0);
@@ -584,34 +971,22 @@ impl Scenery {
                 rgb(245, 176, 73),
             ),
         );
-        // Split props so geometry stays below Macroquad's default batch capacity.
-        let mut meshes = vec![land, road];
-        for chunk in props.vertices.chunks(3600) {
-            let offset = (meshes.len() - 2) * 3600;
-            let end = offset + chunk.len();
-            let indices: Vec<u16> = props
-                .indices
-                .chunks(3)
-                .filter(|tri| {
-                    tri.iter()
-                        .all(|&i| (i as usize) >= offset && (i as usize) < end)
-                })
-                .flat_map(|tri| tri.iter().map(|&i| (i as usize - offset) as u16))
-                .collect();
-            meshes.push(Mesh {
-                vertices: chunk.to_vec(),
-                indices,
-                texture: None,
-            });
-        }
+        let mut meshes = batches(land);
+        meshes.extend(batches(road));
+        meshes.extend(batches(props));
         Self {
             meshes,
             shallows,
             foam,
-            showcase: track.id == 0,
+            showcase: true,
+            cover: batches(cover),
+            crossing: batches(crossing),
+            reveal: empty(),
+            tunnel_roof,
+            coast_scale,
         }
     }
-    pub fn draw(&self, time: f32, high_quality: bool) {
+    pub fn draw(&mut self, time: f32, high_quality: bool, reveal: Option<(Vec3, Vec3)>) {
         clear_background(rgb(121, 205, 205));
         draw_plane(
             vec3(0., -0.55, 0.),
@@ -634,8 +1009,8 @@ impl Scenery {
                 for i in (0..96).step_by(4) {
                     let wave = 1.035 + (time * 0.6 + i as f32 * 0.12).sin() * 0.006;
                     draw_line_3d(
-                        p3(coast_point(i) * wave, -0.23),
-                        p3(coast_point(i + 1) * wave, -0.23),
+                        p3(coast_point(i) * wave * self.coast_scale, -0.23),
+                        p3(coast_point(i + 1) * wave * self.coast_scale, -0.23),
                         Color::new(0.85, 0.97, 0.89, 0.38),
                     );
                 }
@@ -643,6 +1018,70 @@ impl Scenery {
         }
         for mesh in &self.meshes {
             draw_mesh(mesh);
+        }
+        for mesh in self.cover.iter().chain(self.crossing.iter()) {
+            if let Some((player, eye)) = reveal {
+                // Open only the sightline to the driver, preserving the distant mountain,
+                // crater and bridge. Works for orbiting overview and follow cameras alike.
+                let sight = (eye - player).normalize();
+                self.reveal.vertices.clear();
+                self.reveal.indices.clear();
+                for face in mesh.indices.chunks_exact(6) {
+                    let points: [Vec3; 6] =
+                        std::array::from_fn(|i| mesh.vertices[face[i] as usize].position);
+                    let center = points.iter().copied().sum::<Vec3>() / 6.;
+                    let radius = points.iter().map(|p| p.distance(center)).fold(0., f32::max);
+                    let offset = center - player;
+                    let along = offset.dot(sight);
+                    if along > -radius
+                        && (offset - sight * along).length() < 8. + radius
+                        && points.iter().any(|p| p.y > player.y + 0.7)
+                    {
+                        let polygon = [points[0], points[1], points[2], points[5]];
+                        for visible in sightline_cutaway(&polygon, player, sight) {
+                            draw_polygon(
+                                &mut self.reveal,
+                                &visible,
+                                mesh.vertices[face[0] as usize],
+                            );
+                        }
+                        continue;
+                    }
+                    if self.reveal.vertices.len() + face.len() > 3000 {
+                        draw_mesh(&self.reveal);
+                        self.reveal.vertices.clear();
+                        self.reveal.indices.clear();
+                    }
+                    let base = self.reveal.vertices.len() as u16;
+                    self.reveal
+                        .vertices
+                        .extend(face.iter().map(|&index| mesh.vertices[index as usize]));
+                    self.reveal
+                        .indices
+                        .extend((0..face.len()).map(|i| base + i as u16));
+                }
+                draw_mesh(&self.reveal);
+            } else {
+                draw_mesh(mesh);
+            }
+        }
+        for roof in &self.tunnel_roof {
+            let hidden = reveal.is_some_and(|(player, eye)| {
+                let center = roof.vertices.iter().map(|v| v.position).sum::<Vec3>()
+                    / roof.vertices.len().max(1) as f32;
+                let radius = roof
+                    .vertices
+                    .iter()
+                    .map(|v| v.position.distance(center))
+                    .fold(0., f32::max);
+                let sight = (eye - player).normalize();
+                let offset = center - player;
+                let along = offset.dot(sight);
+                along > -radius && (offset - sight * along).length() < 8. + radius
+            });
+            if !hidden {
+                draw_mesh(roof);
+            }
         }
     }
 }
@@ -797,9 +1236,15 @@ fn transform_into(to: &mut Mesh, from: &Mesh, position: Vec3, rotation: Quat, sc
 }
 
 // The same triangles as the visible road and shoulders, restricted to the car's neighborhood.
-fn ground_patch(track: &Track, pos: V2, triangles: &mut Vec<[Vec3; 3]>) -> Option<f32> {
+fn ground_patch(
+    track: &Track,
+    pos: V2,
+    height: f32,
+    route_index: usize,
+    triangles: &mut Vec<[Vec3; 3]>,
+) -> Option<f32> {
     triangles.clear();
-    let road = track.nearest(pos);
+    let road = track.road_for(pos, height, route_index);
     let center = road.index;
     if road.distance + 4.6 < track.width * 0.5
         && (0..10).all(|offset| {
@@ -811,23 +1256,20 @@ fn ground_patch(track: &Track, pos: V2, triangles: &mut Vec<[Vec3; 3]>) -> Optio
     let mut add = |p: [Vec3; 4]| {
         triangles.extend([[p[0], p[1], p[2]], [p[0], p[2], p[3]]]);
     };
-    for offset in 0..9 {
-        let i = (center + SAMPLES + offset - 4) % SAMPLES;
-        let j = (i + 1) % SAMPLES;
-        let normal = |k: usize| {
-            (track.points[(k + 1) % SAMPLES] - track.points[(k + SAMPLES - 1) % SAMPLES])
-                .unit()
-                .normal()
-        };
-        let (a, b, n, m) = (track.points[i], track.points[j], normal(i), normal(j));
-        let (h, hj, w) = (track.heights[i], track.heights[j], track.width * 0.5);
+    let subdivisions = if track.id == 0 { 1 } else { 6 };
+    for offset in 0..9 * subdivisions {
+        let sample = (center + SAMPLES - 4) as f32 + offset as f32 / subdivisions as f32;
+        let i = sample.floor() as usize % SAMPLES;
+        let (a, h, t) = road_sample(track, sample);
+        let (b, hj, u) = road_sample(track, sample + 1. / subdivisions as f32);
+        let (n, m, w) = (t.normal(), u.normal(), track.width * 0.5);
         add([
             p3(a - n * w, h),
             p3(a + n * w, h),
             p3(b + m * w, hj),
             p3(b - m * w, hj),
         ]);
-        if track.id != 2 || !(20..38).contains(&i) {
+        if !track.section(i).elevated && !track.section(i).tunnel {
             for side in [-1., 1.] {
                 add([
                     p3(a + n * (w * side), h - 0.02),
@@ -837,6 +1279,21 @@ fn ground_patch(track: &Track, pos: V2, triangles: &mut Vec<[Vec3; 3]>) -> Optio
                 ]);
             }
         }
+    }
+    if track.id != 0 {
+        triangles.retain(|triangle| {
+            let min_x = triangle.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+            let max_x = triangle
+                .iter()
+                .map(|p| p.x)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let min_z = triangle.iter().map(|p| p.z).fold(f32::INFINITY, f32::min);
+            let max_z = triangle
+                .iter()
+                .map(|p| p.z)
+                .fold(f32::NEG_INFINITY, f32::max);
+            max_x >= pos.x - 5. && min_x <= pos.x + 5. && max_z >= pos.y - 5. && min_z <= pos.y + 5.
+        });
     }
     None
 }
@@ -1006,7 +1463,7 @@ impl CarRenderer {
         let base = p3(pos, h + 0.80 - landing * 0.16);
         self.scratch.vertices.clear();
         self.scratch.indices.clear();
-        let flat_ground = ground_patch(track, pos, &mut self.ground);
+        let flat_ground = ground_patch(track, pos, h, car.road_index, &mut self.ground);
         for (mesh, clearance) in [(&self.shadow, 0.025), (&self.halo, 0.085)]
             .into_iter()
             .take(if player { 2 } else { 1 })
@@ -1158,7 +1615,8 @@ impl Effects {
                     let mut tires = [Vec3::ZERO; 2];
                     for (wheel, side) in [-1., 1.].into_iter().enumerate() {
                         let p = car.pos - car.forward() * 1.2 + car.forward().normal() * side;
-                        tires[wheel] = p3(p, car.ground_height + 0.065);
+                        let tire_road = race.track.road_for(p, car.height, car.road_index);
+                        tires[wheel] = p3(p, race.track.ground(tire_road) + 0.065);
                         if let Some(previous) =
                             self.previous_tires[index].filter(|_| car.slip > 0.15)
                         {
@@ -1290,4 +1748,169 @@ pub fn minimap(race: &Race) {
         );
     }
     draw_text("ISLAND MAP", x, y - 23., 14., rgb(223, 233, 211));
+}
+
+#[cfg(test)]
+mod scenery_tests {
+    use super::*;
+
+    #[test]
+    fn batching_preserves_triangles_across_old_vertex_window() {
+        let mut source = empty();
+        for i in 0..3603 {
+            source
+                .vertices
+                .push(Vertex::new2(vec3(i as f32, 0., 0.), Vec2::ZERO, WHITE));
+        }
+        source.indices.extend([3599, 3600, 3601, 0, 1, 3602]);
+        let split = batches(source);
+        assert_eq!(split.iter().map(|m| m.indices.len()).sum::<usize>(), 6);
+        assert_eq!(split[0].vertices[0].position.x, 3599.);
+        assert_eq!(split[0].vertices[5].position.x, 3602.);
+    }
+
+    #[test]
+    fn every_course_mesh_fits_renderer_batches() {
+        for id in 0..3 {
+            let scenery = Scenery::new(&Track::new(id));
+            for mesh in scenery
+                .meshes
+                .iter()
+                .chain(scenery.cover.iter())
+                .chain(scenery.crossing.iter())
+                .chain(scenery.tunnel_roof.iter())
+                .chain([&scenery.shallows, &scenery.foam])
+            {
+                assert!(
+                    mesh.vertices.len() <= 3000,
+                    "track {id}: {} vertices",
+                    mesh.vertices.len()
+                );
+                assert!(
+                    mesh.indices.len() <= 4500,
+                    "track {id}: {} indices",
+                    mesh.indices.len()
+                );
+                assert_eq!(mesh.indices.len() % 3, 0);
+                assert!(mesh
+                    .indices
+                    .iter()
+                    .all(|&i| (i as usize) < mesh.vertices.len()));
+            }
+            if id == 2 {
+                assert!(!scenery.cover.is_empty());
+                assert!(!scenery.crossing.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn volcano_runoff_stays_on_continuous_island() {
+        let track = Track::new(2);
+        for sample in 0..SAMPLES * 6 {
+            let (point, _, tangent) = road_sample(&track, sample as f32 / 6.);
+            for side in [-1., 1.] {
+                let shoulder = point + tangent.normal() * (track.width * 0.5 + 5.) * side;
+                let angle = (shoulder.y / 104.).atan2(shoulder.x / 111.);
+                let ripple = 1. + (angle * 3. + 0.6).sin() * 0.025 + (angle * 7.).sin() * 0.018;
+                let relative = V2::new(
+                    shoulder.x / (111. * 1.35 * ripple),
+                    shoulder.y / (104. * 1.35 * ripple),
+                );
+                assert!(
+                    relative.len() < 1.,
+                    "sample {sample}: shoulder outside coast"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn volcano_shell_and_lava_leave_exact_upper_road_clearance() {
+        let track = Track::new(2);
+        let mut walls = empty();
+        let mut cover = empty();
+        let mut roof = Vec::new();
+        volcano(&track, &mut walls, &mut cover, &mut roof);
+        let normal = vec3(0.8, 0., 1.).normalize();
+        let width = track.width * 0.5 + 3.;
+        let lava_area: f32 = cover
+            .indices
+            .chunks_exact(3)
+            .filter(|face| {
+                let color = cover.vertices[face[0] as usize].color;
+                color[0] == 245 && color[1] == 117
+            })
+            .map(|face| {
+                let [a, b, c]: [Vec3; 3] =
+                    std::array::from_fn(|i| cover.vertices[face[i] as usize].position);
+                (b - a).cross(c - a).length() * 0.5
+            })
+            .sum();
+        assert!(lava_area > 250., "crater stays visible beside road cutting");
+        assert!(
+            cover
+                .vertices
+                .iter()
+                .filter(|v| v.color[0] == 245 && v.color[1] == 117)
+                .count()
+                > 12,
+            "lava remains in crater beside cutting"
+        );
+        assert!(
+            cover.vertices.iter().filter(|v| v.position.y > 26.).count() > 12,
+            "summit remains beside cutting"
+        );
+        for vertex in &cover.vertices {
+            if vertex.position.y > 11.001 {
+                assert!(
+                    normal.dot(vertex.position).abs() >= width - 0.001,
+                    "shell/lava over upper road: {:?}",
+                    vertex.position
+                );
+            }
+        }
+        for face in cover.indices.chunks_exact(3) {
+            let vertices: [Vec3; 3] =
+                std::array::from_fn(|i| cover.vertices[face[i] as usize].position);
+            let high = clip_polygon(&vertices, Vec3::Y, -11.001);
+            if !high.is_empty() {
+                assert!(
+                    high.iter().all(|p| normal.dot(*p) >= width - 0.01)
+                        || high.iter().all(|p| normal.dot(*p) <= -width + 0.01)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_visibility_boundaries_stay_convex_and_outside_shaft() {
+        let player = Vec3::ZERO;
+        let sight = Vec3::Y;
+        let points = [
+            vec3(-20., 12., -20.),
+            vec3(20., 12., -20.),
+            vec3(20., 12., 20.),
+            vec3(-20., 12., 20.),
+        ];
+        let pieces = sightline_cutaway(&points, player, sight);
+        assert!(pieces.iter().any(|p| p.len() >= 3));
+        for piece in pieces.iter().filter(|p| p.len() >= 3) {
+            for point in piece {
+                assert!(vec2(point.x, point.z).length() >= 7.99);
+            }
+            let mut orientation = 0_f32;
+            for i in 0..piece.len() {
+                let a = piece[(i + 1) % piece.len()] - piece[i];
+                let b = piece[(i + 2) % piece.len()] - piece[(i + 1) % piece.len()];
+                let turn = a.cross(b).dot(Vec3::Y);
+                if turn.abs() > 0.001 {
+                    if orientation != 0. {
+                        assert_eq!(orientation, turn.signum());
+                    }
+                    orientation = turn.signum();
+                }
+            }
+        }
+    }
 }

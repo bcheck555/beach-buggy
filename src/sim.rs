@@ -2,7 +2,7 @@ use std::f32::consts::{PI, TAU};
 
 pub const DT: f32 = 1.0 / 60.0;
 pub const SAMPLES: usize = 128;
-pub const TRACK_NAMES: [&str; 3] = ["Beach Loop", "Rocky Coast", "Lagoon Run"];
+pub const TRACK_NAMES: [&str; 3] = ["Beach Loop", "Rocky Coast", "Volcano Run"];
 pub const PRESET_NAMES: [&str; 3] = ["Arcade", "Balanced", "Realistic"];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -148,6 +148,14 @@ pub struct Track {
     pub points: Vec<V2>,
     pub heights: Vec<f32>,
     pub width: f32,
+    sections: Vec<RoadSection>,
+}
+#[derive(Clone, Copy, Default)]
+pub struct RoadSection {
+    pub tunnel: bool,
+    pub elevated: bool,
+    pub barrier: bool,
+    pub surface: usize,
 }
 #[derive(Clone, Copy)]
 pub struct Road {
@@ -160,6 +168,9 @@ pub struct Road {
 }
 impl Track {
     pub fn new(id: usize) -> Self {
+        if id == 2 {
+            return Self::volcano();
+        }
         let controls: &[(f32, f32)] = match id {
             0 => &[
                 (0., -76.),
@@ -231,9 +242,116 @@ impl Track {
             points,
             heights,
             width: if id == 0 { 18. } else { 15. },
+            sections: vec![
+                RoadSection {
+                    barrier: id == 1,
+                    surface: usize::from(id == 1),
+                    ..RoadSection::default()
+                };
+                SAMPLES
+            ],
         }
     }
+    fn volcano() -> Self {
+        // Two distinct lobes meet only at a height-separated central crossing.
+        // Closely spaced controls at the western tips form the braking hairpins.
+        let controls = [
+            (0., -90., 0.8),
+            (65., -83., 0.8),
+            (96., -58., 1.),
+            (85., -28., 3.),
+            (55., -32., 9.),
+            (25., -20., 12.),
+            (-25., 20., 12.),
+            (-60., 48., 10.),
+            (-84., 42., 6.),
+            (-103., 66., 3.),
+            (-70., 95., 0.8),
+            (0., 95., 0.8),
+            (65., 85., 0.8),
+            (96., 60., 0.8),
+            (85., 28., 0.8),
+            (60., 22., 0.8),
+            (25., 20., 0.8),
+            (-25., -20., 0.8),
+            (-60., -48., 0.8),
+            (-84., -42., 0.8),
+            (-103., -66., 0.8),
+            (-70., -95., 0.8),
+        ];
+        let n = controls.len();
+        let mut dense = Vec::new();
+        let mut cumulative = vec![0.];
+        for sample in 0..=n * 64 {
+            let parameter = sample as f32 / 64.;
+            let k = parameter.floor() as usize % n;
+            let u = parameter.fract();
+            let value = |offset: usize, component: usize| {
+                let p = controls[(k + offset) % n];
+                match component {
+                    0 => p.0,
+                    1 => p.1,
+                    _ => p.2,
+                }
+            };
+            let interpolate = |component| {
+                let (a, b, c, d) = (
+                    value(n - 1, component),
+                    value(0, component),
+                    value(1, component),
+                    value(2, component),
+                );
+                0.5 * (2. * b
+                    + (c - a) * u
+                    + (2. * a - 5. * b + 4. * c - d) * u * u
+                    + (3. * b - a - 3. * c + d) * u * u * u)
+            };
+            let p = V2::new(interpolate(0), interpolate(1));
+            if let Some((previous, _, _)) = dense.last() {
+                cumulative.push(cumulative.last().unwrap() + (p - *previous).len());
+            }
+            dense.push((p, interpolate(2).max(0.8), parameter));
+        }
+        let length = *cumulative.last().unwrap();
+        let mut track = Self {
+            id: 2,
+            points: Vec::new(),
+            heights: Vec::new(),
+            width: 15.,
+            sections: Vec::new(),
+        };
+        for i in 0..SAMPLES {
+            let distance = length * i as f32 / SAMPLES as f32;
+            let j = cumulative
+                .partition_point(|&d| d <= distance)
+                .clamp(1, cumulative.len() - 1);
+            let t = (distance - cumulative[j - 1]) / (cumulative[j] - cumulative[j - 1]);
+            let (a, ah, ap) = dense[j - 1];
+            let (b, bh, bp) = dense[j];
+            let parameter = ap + (bp - ap) * t;
+            let tunnel = (15.6..17.4).contains(&parameter);
+            let elevated = (3.8..8.1).contains(&parameter);
+            track.points.push(a.lerp(b, t));
+            track.heights.push(ah + (bh - ah) * t);
+            track.sections.push(RoadSection {
+                tunnel,
+                elevated,
+                barrier: tunnel || elevated,
+                surface: 1,
+            });
+        }
+        track
+    }
+    pub fn section(&self, index: usize) -> RoadSection {
+        self.sections[index % SAMPLES]
+    }
     pub fn nearest(&self, pos: V2) -> Road {
+        self.query(pos, None)
+    }
+    pub fn road_for(&self, pos: V2, height: f32, route_index: usize) -> Road {
+        self.query(pos, Some((height, route_index)))
+    }
+    fn query(&self, pos: V2, route: Option<(f32, usize)>) -> Road {
         let mut best = Road {
             pos: self.points[0],
             tangent: V2::new(1., 0.),
@@ -242,26 +360,34 @@ impl Track {
             height: 0.,
             grip: 1.,
         };
+        let mut best_score = f32::MAX;
         for i in 0..SAMPLES {
             let j = (i + 1) % SAMPLES;
             let delta = self.points[j] - self.points[i];
             let t = ((pos - self.points[i]).dot(delta) / delta.dot(delta)).clamp(0., 1.);
             let p = self.points[i] + delta * t;
             let distance = (pos - p).len();
-            if distance < best.distance {
+            let height = self.heights[i] * (1. - t) + self.heights[j] * t;
+            let score = if self.id == 2 {
+                if let Some((car_height, index)) = route {
+                    let separation = i.abs_diff(index);
+                    let steps = separation.min(SAMPLES - separation);
+                    distance + (height - car_height).abs() * 2. + if steps > 10 { 14. } else { 0. }
+                } else {
+                    distance
+                }
+            } else {
+                distance
+            };
+            if score < best_score {
+                best_score = score;
                 best = Road {
                     pos: p,
                     tangent: delta.unit(),
                     distance,
                     index: i,
-                    height: self.heights[i] * (1. - t) + self.heights[j] * t,
-                    grip: if self.id == 1 {
-                        0.92
-                    } else if self.id == 2 && (20..38).contains(&i) {
-                        1.25
-                    } else {
-                        1.
-                    },
+                    height,
+                    grip: if self.id == 1 { 0.92 } else { 1. },
                 };
             }
         }
@@ -289,6 +415,7 @@ pub struct Input {
 }
 #[derive(Clone)]
 pub struct Car {
+    pub road_index: usize,
     pub spec: usize,
     pub pos: V2,
     pub previous: V2,
@@ -326,6 +453,7 @@ impl Car {
             + t.normal() * if grid.is_multiple_of(2) { -2.4 } else { 2.4 };
         let h = track.ground(track.nearest(pos));
         Self {
+            road_index: track.nearest(pos).index,
             spec,
             pos,
             previous: pos,
@@ -366,7 +494,9 @@ impl Car {
         self.vel = V2::default();
         self.yaw = 0.;
         self.vertical = 0.;
-        self.height = track.ground(track.nearest(self.pos));
+        self.road_index = last * 16;
+        self.height =
+            track.ground(track.road_for(self.pos, track.heights[self.road_index], self.road_index));
         self.ground_height = self.height;
         self.previous_height = self.height;
         self.grounded = true;
@@ -379,7 +509,10 @@ impl Car {
         self.throttle = 0.;
         self.load = 0.;
         self.landing = 0.;
-        self.surface = surface_at(track, track.nearest(self.pos));
+        self.surface = surface_at(
+            track,
+            track.road_for(self.pos, self.height, self.road_index),
+        );
     }
     pub fn forward(&self) -> V2 {
         V2::new(self.heading.cos(), self.heading.sin())
@@ -393,7 +526,7 @@ impl Car {
         self.throttle = input.throttle.clamp(0., 1.);
         let spec = CARS[self.spec];
         let tune = preset(physics);
-        let road = track.nearest(self.pos);
+        let road = track.road_for(self.pos, self.height, self.road_index);
         let offroad = road.distance > track.width * 0.5;
         let traction = spec.grip
             * tune.grip
@@ -441,7 +574,8 @@ impl Car {
             self.heading += self.yaw * DT;
             self.slip = lateral.abs() / speed.max(4.);
             // Springs follow rising terrain; downhill edges release the vehicle.
-            let ahead = track.ground(track.nearest(self.pos + self.vel * DT));
+            let ahead =
+                track.ground(track.road_for(self.pos + self.vel * DT, self.height, road.index));
             let ground_velocity = (ahead - ground_before) / DT;
             self.vertical += (ground_velocity - self.vertical) * (spec.suspension * DT).min(1.);
             let transfer = -(drive + brake - drag) * spec.mass / 680. * 0.004;
@@ -460,7 +594,8 @@ impl Car {
             self.pitch -= DT * 0.16;
         }
         self.pos = self.pos + self.vel * DT;
-        let next = track.nearest(self.pos);
+        let next = track.road_for(self.pos, self.height, road.index);
+        self.road_index = next.index;
         let ground = track.ground(next);
         self.ground_height = ground;
         self.height += self.vertical * DT;
@@ -476,7 +611,7 @@ impl Car {
         }
         self.surface = surface_at(track, next);
         // Railings constrain rocky sections and bridges, shoulders remain drivable elsewhere.
-        let rails = track.id == 1 || (track.id == 2 && (20..38).contains(&next.index));
+        let rails = track.section(next.index).barrier;
         if rails && next.distance > track.width * 0.5 + 1. {
             let normal = (self.pos - next.pos).unit();
             let outward = self.vel.dot(normal);
@@ -501,7 +636,11 @@ impl Car {
         if before < 0. && after >= 0. {
             let fraction = (-before / (after - before)).clamp(0., 1.);
             let crossing = self.previous.lerp(self.pos, fraction);
-            if (crossing - p).dot(t.normal()).abs() < track.width * 0.5 + 2. {
+            let crossing_height = self.previous_height * (1. - fraction) + self.height * fraction;
+            if (crossing - p).dot(t.normal()).abs() < track.width * 0.5 + 2.
+                && (track.id != 2
+                    || (crossing_height - track.heights[self.next_cp * 16]).abs() < 3.)
+            {
                 if self.next_cp == 0 {
                     self.laps += 1;
                     if self.best == 0. || self.lap_time < self.best {
@@ -519,6 +658,22 @@ impl Car {
     }
     pub fn progress(&self, track: &Track) -> f32 {
         let last = (self.next_cp + 7) % 8;
+        if track.id == 2 {
+            let road = track.road_for(self.pos, self.height, self.road_index);
+            let delta = track.points[(road.index + 1) % SAMPLES] - track.points[road.index];
+            let fraction =
+                ((self.pos - track.points[road.index]).dot(delta) / delta.dot(delta)).clamp(0., 1.);
+            let delta = road.index as f32 + fraction - (last * 16) as f32;
+            let signed = if delta < -(SAMPLES as f32) * 0.5 {
+                delta + SAMPLES as f32
+            } else if delta > SAMPLES as f32 * 0.5 {
+                delta - SAMPLES as f32
+            } else {
+                delta
+            };
+            let relative = (signed / 16.).clamp(0., 0.99);
+            return self.laps as f32 * 8. + last as f32 + relative;
+        }
         let (a, _) = track.checkpoint(last);
         let (b, _) = track.checkpoint(self.next_cp);
         let segment = ((self.pos - a).dot((b - a).unit()) / (b - a).len()).clamp(0., 0.99);
@@ -555,12 +710,8 @@ pub fn collide(a: &mut Car, b: &mut Car) {
 fn surface_at(track: &Track, road: Road) -> usize {
     if road.distance > track.width * 0.5 {
         0
-    } else if track.id == 1 {
-        1
-    } else if track.id == 2 && (20..38).contains(&road.index) {
-        2
     } else {
-        0
+        track.section(road.index).surface
     }
 }
 
@@ -576,9 +727,13 @@ fn ai_drive(
     lane: f32,
     speed_cap: f32,
 ) -> Input {
-    let road = track.nearest(car.pos);
+    let road = track.road_for(car.pos, car.height, car.road_index);
     let speed = car.vel.len();
-    let look = 3 + (speed * 0.08) as usize;
+    let look = if track.id == 2 {
+        2 + (speed * 0.04) as usize
+    } else {
+        3 + (speed * 0.08) as usize
+    };
     let target_index = (road.index + look) % SAMPLES;
     let target_tangent = (track.points[(target_index + 1) % SAMPLES]
         - track.points[(target_index + SAMPLES - 1) % SAMPLES])
@@ -598,8 +753,11 @@ fn ai_drive(
     let grip = (CARS[car.spec].grip * preset(physics).grip).sqrt().min(1.2);
     // Difficulty changes pace; handling still determines safe corner speed.
     let pace = [0.84, 1., 1.12][difficulty.min(2)];
-    let desired =
-        ((CARS[car.spec].top * 0.62 * grip / (1. + bend * 2.8)).max(7.) * pace).min(speed_cap);
+    let desired = if track.id == 2 {
+        ((CARS[car.spec].top * 0.68 * grip / (1. + bend * 3.2)).max(6.5) * pace).min(speed_cap)
+    } else {
+        ((CARS[car.spec].top * 0.62 * grip / (1. + bend * 2.8)).max(7.) * pace).min(speed_cap)
+    };
     let error_speed = desired - speed;
     Input {
         throttle: (error_speed * 0.6).clamp(0., 0.9),
@@ -631,7 +789,7 @@ fn traffic_input(
     state: &mut AiState,
 ) -> Input {
     let car = &cars[index];
-    let road = track.nearest(car.pos);
+    let road = track.road_for(car.pos, car.height, car.road_index);
     let forward = road.tangent;
     let side = forward.normal();
     let lateral = (car.pos - road.pos).dot(side);
@@ -689,6 +847,7 @@ fn traffic_input(
         // Hold position while alongside another car; otherwise gently return to a racing line.
         let alongside = cars.iter().enumerate().any(|(other_index, other)| {
             other_index != index
+                && (other.height - car.height).abs() < 1.6
                 && (other.pos - car.pos).dot(forward).abs() < 6.
                 && (other.pos - car.pos).dot(side).abs() < 6.
         });
@@ -833,12 +992,156 @@ impl Race {
 }
 
 pub fn record_key(track: usize, car: usize, physics: usize) -> i32 {
-    (100 + track * 12 + car * 3 + physics) as i32
+    (if track == 2 { 200 } else { 100 + track * 12 } + car * 3 + physics) as i32
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn place(track: &Track, index: usize, spec: usize) -> Car {
+        let mut car = Car::spawn(track, spec, 0);
+        car.pos = track.points[index];
+        car.previous = car.pos;
+        car.road_index = index;
+        car.height = track.heights[index];
+        car.previous_height = car.height;
+        car.ground_height = car.height;
+        let tangent = (track.points[(index + 1) % SAMPLES] - track.points[index]).unit();
+        car.heading = tangent.y.atan2(tangent.x);
+        car
+    }
+    #[test]
+    fn volcano_crossing_keeps_levels_and_collisions_separate() {
+        let track = Track::new(2);
+        let upper = track.road_for(V2::default(), 12., 35);
+        let lower = track.road_for(V2::default(), 0.8, 100);
+        assert!(track.section(upper.index).elevated);
+        assert!(track.section(lower.index).tunnel);
+        assert!(upper.height - lower.height > 10.);
+        let mut a = place(&track, upper.index, 0);
+        let mut b = place(&track, lower.index, 1);
+        a.pos = V2::default();
+        b.pos = a.pos;
+        let before = (a.pos, b.pos);
+        collide(&mut a, &mut b);
+        assert_eq!((a.pos, b.pos), before);
+        for _ in 0..30 {
+            a.step(Input::default(), &track, 0);
+            b.step(Input::default(), &track, 0);
+            assert!(a.height - b.height > 10.);
+            assert!(track.section(a.road_index).elevated);
+            assert!(track.section(b.road_index).tunnel);
+        }
+    }
+    #[test]
+    fn volcano_gates_reset_and_reverse_preserve_route() {
+        let track = Track::new(2);
+        for cp in 0..8 {
+            let mut car = place(&track, cp * 16, 0);
+            car.next_cp = cp;
+            car.height = track.heights[cp * 16] + 10.;
+            car.previous_height = car.height;
+            cross(&mut car, &track, cp, true);
+            assert_eq!(car.next_cp, cp, "wrong-level checkpoint {cp}");
+            car.next_cp = (cp + 1) % 8;
+            car.height = 100.;
+            car.road_index = (cp * 16 + 64) % SAMPLES;
+            car.reset(&track);
+            assert!((car.height - track.heights[cp * 16]).abs() < 1.);
+            assert!(car.road_index.abs_diff(cp * 16) <= 1);
+            car = place(&track, (cp * 16 + SAMPLES - 1) % SAMPLES, 0);
+            car.next_cp = (cp + 1) % 8;
+            assert!(
+                (car.progress(&track) - cp as f32).abs() < 0.01,
+                "reversing behind checkpoint {cp}"
+            );
+        }
+    }
+    #[test]
+    fn volcano_tunnel_walls_match_drivable_boundary() {
+        let track = Track::new(2);
+        let index = (0..SAMPLES).find(|&i| track.section(i).tunnel).unwrap();
+        let mut car = place(&track, index, 0);
+        let road = track.road_for(car.pos, car.height, index);
+        car.pos = car.pos + road.tangent.normal() * 12.;
+        car.vel = road.tangent.normal() * 8.;
+        car.step(Input::default(), &track, 1);
+        let road = track.road_for(car.pos, car.height, car.road_index);
+        assert!(road.distance <= track.width * 0.5 + 1.01);
+        assert!(car.impact > 0.);
+    }
+    #[test]
+    fn volcano_hairpins_reward_braking_for_every_car_and_preset() {
+        let track = Track::new(2);
+        for apex in [V2::new(-84., 42.), V2::new(-84., -42.)] {
+            let index = track.nearest(apex).index;
+            for (spec, profile) in CARS.iter().enumerate() {
+                for physics in 0..3 {
+                    let mut braked = place(&track, (index + SAMPLES - 6) % SAMPLES, spec);
+                    // Solve steady-state full-throttle drive against the actual drag law.
+                    let mut low = 0.;
+                    let mut high = profile.top;
+                    for _ in 0..40 {
+                        let speed = (low + high) * 0.5;
+                        let drive = profile.accel
+                            * preset(physics).power
+                            * (1. - (speed / profile.top).powi(2));
+                        if drive > speed * 0.14 + speed * speed * 0.002 {
+                            low = speed;
+                        } else {
+                            high = speed;
+                        }
+                    }
+                    braked.vel = braked.forward() * ((low + high) * 0.5);
+                    let mut flat = braked.clone();
+                    let mut brake_error = 0_f32;
+                    let mut flat_error = 0_f32;
+                    let mut exited = false;
+                    for _ in 0..1200 {
+                        let input = ai_input(&braked, &track, physics);
+                        braked.step(input, &track, physics);
+                        let mut input = ai_input(&flat, &track, physics);
+                        input.throttle = 1.;
+                        input.brake = 0.;
+                        flat.step(input, &track, physics);
+                        brake_error = brake_error.max(
+                            track
+                                .road_for(braked.pos, braked.height, braked.road_index)
+                                .distance,
+                        );
+                        flat_error = flat_error.max(
+                            track
+                                .road_for(flat.pos, flat.height, flat.road_index)
+                                .distance,
+                        );
+                        if braked.road_index >= index + 3 {
+                            exited = true;
+                            break;
+                        }
+                    }
+                    assert!(
+                        exited,
+                        "braking failed to finish hairpin car{spec} physics{physics}"
+                    );
+                    assert!(brake_error<track.width*0.5 && flat_error>track.width*0.5,"apex {apex:?} car{spec} physics{physics}: brake={brake_error} throttle={flat_error}");
+                }
+            }
+        }
+    }
+    #[test]
+    fn volcano_road_ribbon_has_room_for_smooth_shoulders() {
+        let track = Track::new(2);
+        for i in 0..SAMPLES {
+            let a = track.points[(i + SAMPLES - 1) % SAMPLES];
+            let b = track.points[i];
+            let c = track.points[(i + 1) % SAMPLES];
+            let ab = b - a;
+            let bc = c - b;
+            let area = (ab.x * bc.y - ab.y * bc.x).abs();
+            let radius = ab.len() * bc.len() * (c - a).len() / (2. * area.max(0.0001));
+            assert!(radius > 10., "sample{i} radius{radius}");
+        }
+    }
     #[test]
     fn car_profiles_and_presets_differ() {
         let track = Track::new(0);
@@ -975,6 +1278,12 @@ mod tests {
             for c in 0..4 {
                 for p in 0..3 {
                     assert!(keys.insert(record_key(t, c, p)));
+                    if t == 2 {
+                        assert!(record_key(t, c, p) >= 200);
+                        assert_ne!(record_key(t, c, p), (124 + c * 3 + p) as i32);
+                    } else {
+                        assert_eq!(record_key(t, c, p), (100 + t * 12 + c * 3 + p) as i32);
+                    }
                 }
             }
         }
@@ -986,7 +1295,7 @@ mod tests {
                 for physics in 0..3 {
                     let mut race = Race::new(track, car, physics, true);
                     race.countdown = 0.;
-                    for _ in 0..60 * 240 {
+                    for _ in 0..60 * if track == 2 { 360 } else { 240 } {
                         let input = ai_input(&race.cars[0], &race.track, physics);
                         race.tick(input);
                         if race.cars[0].finished {
@@ -1018,7 +1327,7 @@ mod tests {
             for physics in 0..3 {
                 let mut race = Race::new(track, 0, physics, false);
                 race.countdown = 0.;
-                for _ in 0..60 * 300 {
+                for _ in 0..60 * if track == 2 { 480 } else { 300 } {
                     let input = ai_input(&race.cars[0], &race.track, physics);
                     race.tick(input);
                     if race.cars.iter().all(|c| c.finished) {
@@ -1220,11 +1529,12 @@ mod tests {
             0.
         );
         assert_eq!(Car::spawn(&Track::new(1), 0, 0).surface, 1);
-        let lagoon = Track::new(2);
-        car.pos = lagoon.points[24];
-        car.height = lagoon.ground(lagoon.nearest(car.pos));
-        car.step(Input::default(), &lagoon, 0);
-        assert_eq!(car.surface, 2);
+        let volcano = Track::new(2);
+        car.pos = volcano.points[24];
+        car.road_index = 24;
+        car.height = volcano.heights[24];
+        car.step(Input::default(), &volcano, 0);
+        assert_eq!(car.surface, 1);
     }
 
     #[test]
@@ -1235,7 +1545,7 @@ mod tests {
                     for difficulty in 0..3 {
                         let mut race =
                             Race::with_difficulty(track, car, physics, false, difficulty);
-                        for _ in 0..60 * 360 {
+                        for _ in 0..60 * if track == 2 { 480 } else { 360 } {
                             let input = ai_input(&race.cars[0], &race.track, physics);
                             race.tick(input);
                             if race.cars.iter().all(|car| car.finished) {
@@ -1244,7 +1554,7 @@ mod tests {
                         }
                         assert!(
                             race.cars.iter().all(|car| car.finished),
-                            "grid unfinished: track={track} car={car} physics={physics} difficulty={difficulty}"
+                            "grid unfinished: track={track} car={car} physics={physics} difficulty={difficulty}: {:?}",race.cars.iter().map(|c|(c.spec,c.laps,c.next_cp,c.pos,c.vel.len(),c.road_index)).collect::<Vec<_>>()
                         );
                     }
                 }

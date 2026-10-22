@@ -8,7 +8,7 @@
     ['Riptide','POWER / DRIFT','#f66883',98,98,54],
     ['Dune Hauler','HEAVY / PLANTED','#9d97f6',57,70,84],
   ];
-  const tracks = ['Beach Loop','Rocky Coast','Lagoon Run'];
+  const tracks = ['Beach Loop','Rocky Coast','Volcano Run'];
   const presets = ['ARCADE','BALANCED','REALISTIC'];
   const notes = ['More grip. More confidence. Full send.','A little slip. A little skill. Find the balance.','Feel the weight. Respect the brakes. Earn the corner.'];
   const storage = {
@@ -185,11 +185,11 @@
         if(kind===2)tone(660,0.16,strength*0.12);
         if(kind===3){tone(523,0.3);setTimeout(()=>tone(659,0.3),150);setTimeout(()=>tone(784,0.5),300);}
       },
-      bb_telemetry(state,speed,lap,position,elapsed,best,countdown,finish,slip,impact,grounded,throttle=0,load=0,surface=0,landing=0,pbDelta=0,newBest=0) {
+      bb_telemetry(state,speed,lap,position,elapsed,best,countdown,finish,slip,impact,grounded,throttle=0,load=0,surface=0,landing=0,pbDelta=0,newBest=0,routeIndex=0,height=0,tunnel=0,elevated=0,worldX=0,worldZ=0) {
         const previous=latest,changed=state!==currentState;
         const unit=value=>Number.isFinite(value)?Math.max(0,Math.min(1,value)):0;
         throttle=unit(throttle);load=unit(load);landing=unit(landing);surface=bounded(surface,2);
-        latest={state,speed,lap,position,elapsed,best,countdown,finish,slip,impact,grounded,throttle,load,surface,landing,pbDelta,newBest};
+        latest={state,speed,lap,position,elapsed,best,countdown,finish,slip,impact,grounded,throttle,load,surface,landing,pbDelta,newBest,routeIndex,height,tunnel,elevated,worldX,worldZ};
         if(changed)stateUI(state);
         if(state===1&&previous?.state===1&&lap>previous.lap&&countdown<=0)announce(lap===3?'FINAL LAP · MAKE IT COUNT':`LAP ${lap} · FIND YOUR FLOW`);
         if(state===1&&countdown>0&&previous?.countdown<=0){clearTimeout(announcementTimer);$('race-announcement').hidden=true;}

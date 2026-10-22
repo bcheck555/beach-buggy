@@ -31,6 +31,12 @@ extern "C" {
         landing: f32,
         pb_delta: f32,
         new_best: i32,
+        route_index: i32,
+        height: f32,
+        tunnel: i32,
+        elevated: i32,
+        world_x: f32,
+        world_z: f32,
     );
 }
 pub fn command() -> i32 {
@@ -117,6 +123,12 @@ pub struct Telemetry {
     pub landing: f32,
     pub pb_delta: f32,
     pub new_best: bool,
+    pub route_index: usize,
+    pub height: f32,
+    pub tunnel: bool,
+    pub elevated: bool,
+    pub world_x: f32,
+    pub world_z: f32,
 }
 pub fn telemetry(t: Telemetry) {
     #[cfg(target_arch = "wasm32")]
@@ -139,6 +151,12 @@ pub fn telemetry(t: Telemetry) {
             t.landing,
             t.pb_delta,
             i32::from(t.new_best),
+            t.route_index as i32,
+            t.height,
+            i32::from(t.tunnel),
+            i32::from(t.elevated),
+            t.world_x,
+            t.world_z,
         );
     }
     #[cfg(not(target_arch = "wasm32"))]

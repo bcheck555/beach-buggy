@@ -58,3 +58,4 @@ body[data-camera-view=whole-track] #race-announcement{top:auto;bottom:100px;righ
   body[data-state=menu]{min-height:0}
   footer.menu-only{position:static;margin:24px 25px;}
 }
+.track-thumb.volcano{background:radial-gradient(ellipse at 55% 39%,#ed9864 0 10%,#796b61 12% 31%,#9ca17d 33% 55%,#8bbdb0 75%)}

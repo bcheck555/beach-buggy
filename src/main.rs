@@ -171,6 +171,7 @@ async fn main() {
             camera_extent = 54.;
         }
         was_whole_track = whole_track;
+        let scene_camera;
         if !whole_track {
             let desired_look = player.vel * 0.45;
             let desired_look = desired_look * (10. / desired_look.len().max(10.));
@@ -209,7 +210,7 @@ async fn main() {
                     (race.elapsed * 37.).cos() * response * 0.6,
                     0.,
                 );
-            set_camera(&Camera3D {
+            scene_camera = Camera3D {
                 position: camera_focus
                     + if overview {
                         vec3(80., 155., 160.)
@@ -223,13 +224,32 @@ async fn main() {
                 z_near: 0.1,
                 z_far: 1500.,
                 ..Default::default()
-            });
+            };
         } else {
             track_camera.update(&race.track, screen_width(), screen_height());
-            set_camera(&track_camera.camera(bridge::option(10)));
+            scene_camera = track_camera.camera(bridge::option(10));
         }
+        set_camera(&scene_camera);
         let overview = state == 0;
-        scenery.draw(get_time() as f32, high_quality);
+        let section = race.track.section(player.road_index);
+        let near_tunnel = player.height < 5.
+            && (0..5).any(|offset| {
+                race.track
+                    .section((player.road_index + SAMPLES + offset - 2) % SAMPLES)
+                    .tunnel
+            });
+        scenery.draw(
+            get_time() as f32,
+            high_quality,
+            if (near_tunnel || (section.elevated && car_pos.len() < 48.)) && !overview {
+                Some((
+                    vec3(car_pos.x, player.height + 0.8, car_pos.y),
+                    scene_camera.position,
+                ))
+            } else {
+                None
+            },
+        );
         effects.draw();
         for (i, car) in race.cars.iter().enumerate() {
             car_renderer.draw(
@@ -246,6 +266,12 @@ async fn main() {
             render::minimap(&race);
         }
         bridge::telemetry(bridge::Telemetry {
+            route_index: player.road_index,
+            world_x: player.pos.x,
+            world_z: player.pos.y,
+            height: player.height,
+            tunnel: section.tunnel,
+            elevated: section.elevated,
             state,
             speed: player.vel.len() * 3.6,
             lap: (player.laps + 1).min(3) as i32,

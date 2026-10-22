@@ -470,6 +470,110 @@ test('storage validates numeric records, separates configurations, and survives 
   await page.reload();await expect(page.locator('#start')).toBeEnabled();await start(page);
 });
 
+test('Volcano Run replaces Lagoon Run without reusing its records',async({page})=>{
+  await page.addInitScript(()=>{
+    localStorage.setItem('coast-v1:settings',JSON.stringify({track:2,car:0,physics:0,mode:1,trackZoom:[100,110,120]}));
+    localStorage.setItem('coast-v1:124','12.5');
+    localStorage.setItem('coast-v1:100','41.25');
+    localStorage.setItem('coast-v1:112','42.5');
+  });
+  const errors=await ready(page);
+  await expect(page.locator('[data-track="2"]')).toHaveAttribute('aria-pressed','true');
+  await expect(page.locator('[data-track="2"] b')).toHaveText('Volcano Run');
+  await expect(page.locator('[data-track="2"] small')).toHaveText('TUNNEL / HAIRPINS');
+  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('coast-v1:settings')).trackZoom)).toEqual([100,110,120]);
+  await start(page);
+  await expect(page.locator('#race-track')).toHaveText('Volcano Run');
+  await expect.poll(()=>page.evaluate(()=>coast.telemetry.best)).toBe(0);
+  expect(await page.evaluate(()=>[100,112,124].map(k=>localStorage.getItem(`coast-v1:${k}`)))).toEqual(['41.25','42.5','12.5']);
+  await page.evaluate(()=>importObject.env.bb_store(200,55.25));
+  await page.keyboard.press('Escape');
+  await expect(page.locator('body')).toHaveAttribute('data-state','pause');
+  await page.locator('#restart').click();
+  await expect.poll(()=>page.evaluate(()=>coast.telemetry.best)).toBe(55.25);
+  expect(errors).toEqual([]);
+});
+
+test('volcano crossing and tunnel render in both cameras and detail levels',async({page},info)=>{
+  test.setTimeout(240000);
+  const errors=await ready(page,'/?autodrive=1');
+  await page.locator('[data-track="2"]').click();
+  await page.locator('#mode').selectOption('1');
+  await page.locator('.setup-options summary').click();
+  await page.locator('#camera-view').selectOption('1');
+  await start(page);
+  const levels={};
+  for(const section of ['elevated','tunnel']) {
+    if(section==='tunnel') {
+      await page.waitForFunction(()=>{
+        if(coast.telemetry?.state!==1||coast.telemetry.tunnel!==1)return false;
+        document.querySelector('#pause').click();
+        return true;
+      },undefined,{timeout:90000,polling:'raf'});
+      await expect(page.locator('body')).toHaveAttribute('data-state','pause');
+      for(const camera of ['0','1']) {
+        await page.locator('#pause-camera-view').selectOption(camera);
+        await page.screenshot({path:info.outputPath(`volcano-entrance-${camera}.png`),style:'#modal{visibility:hidden}'});
+      }
+      await page.locator('#resume').click();
+    }
+    await page.waitForFunction(section=>{
+      const t=coast.telemetry;
+      if(t?.state!==1||t[section]!==1||t.countdown>0||Math.hypot(t.worldX,t.worldZ)>=10)return false;
+      // Freeze in this animation frame; a browser round trip can otherwise
+      // carry the accelerated demo driver all the way to the tunnel exit.
+      document.querySelector('#pause').click();
+      return true;
+    },section,{timeout:90000,polling:'raf'});
+    await expect(page.locator('body')).toHaveAttribute('data-state','pause');
+    expect(await page.evaluate(()=>Math.hypot(coast.telemetry.worldX,coast.telemetry.worldZ))).toBeLessThan(12);
+    levels[section]=await page.evaluate(()=>coast.telemetry.height);
+    for(const camera of ['0','1'])for(const quality of ['0','1']) {
+      await page.locator('#pause-camera-view').selectOption(camera);
+      await page.locator('#pause-quality').selectOption(quality);
+      for(const [name,width,height] of [['desktop',1440,900],['narrow',600,900]]) {
+        await page.setViewportSize({width,height});
+        await page.waitForTimeout(100);
+        await page.screenshot({path:info.outputPath(`volcano-${section}-${camera==='1'?'whole':'follow'}-${quality==='1'?'high':'low'}-${name}.png`),style:'#modal{visibility:hidden}'});
+      }
+    }
+    await page.locator('#resume').click();
+  }
+  expect(levels.elevated-levels.tunnel).toBeGreaterThan(5);
+  await page.waitForFunction(()=>{
+    if(coast.telemetry?.state!==1||coast.telemetry.tunnel!==0)return false;
+    document.querySelector('#pause').click();
+    return true;
+  },undefined,{timeout:30000,polling:'raf'});
+  await expect(page.locator('body')).toHaveAttribute('data-state','pause');
+  for(const camera of ['0','1']) {
+    await page.locator('#pause-camera-view').selectOption(camera);
+    await page.screenshot({path:info.outputPath(`volcano-exit-${camera}.png`),style:'#modal{visibility:hidden}'});
+  }
+  await page.locator('#resume').click();
+  await expect(page.locator('body')).toHaveAttribute('data-state','results',{timeout:150000});
+  expect(errors).toEqual([]);
+});
+
+test('Rocky Coast smooth scenery renders at both detail levels and camera views',async({page},info)=>{
+  const errors=await ready(page,'/?autodrive=1');
+  await page.locator('[data-track="1"]').click();
+  await start(page);
+  await expect.poll(()=>page.evaluate(()=>coast.telemetry.elapsed)).toBeGreaterThan(12);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('body')).toHaveAttribute('data-state','pause');
+  for(const camera of ['0','1'])for(const quality of ['0','1']) {
+    await page.locator('#pause-camera-view').selectOption(camera);
+    await page.locator('#pause-quality').selectOption(quality);
+    for(const [name,width,height] of [['desktop',1440,900],['narrow',600,900]]) {
+      await page.setViewportSize({width,height});
+      await page.waitForTimeout(100);
+      await page.screenshot({path:info.outputPath(`rocky-${camera==='1'?'whole':'follow'}-${quality==='1'?'high':'low'}-${name}.png`),style:'#modal{visibility:hidden}'});
+    }
+  }
+  expect(errors).toEqual([]);
+});
+
 test('1080p render sample and canvas capture',async({page},info)=>{
   await page.setViewportSize({width:1920,height:1080});
   await ready(page);await start(page);

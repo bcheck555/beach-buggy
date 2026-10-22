@@ -7,6 +7,7 @@ for(const args of [
   ['clippy','--locked','--all-targets','--','-D','warnings'],
   ['clippy','--locked','--target','wasm32-unknown-unknown','--','-D','warnings'],
   ['test','--locked','--release','--lib'],
+  ['test','--locked','--release','--bin','beach-buggy'],
 ]) {
   console.log(`\nChecking: cargo ${args.join(' ')}`);
   const r=spawnSync('cargo',args,{env,stdio:'inherit'});
