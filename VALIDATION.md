@@ -1,5 +1,14 @@
 # Validation — October 19, 2026
 
+## Tighter whole-track framing — October 21, 2026
+
+- Reduced circuit padding and reserved HUD bands to enlarge the road. Fit the recovery envelope separately to the full viewport, preserving off-track car visibility.
+- Regression reproduced before the fix: Beach Loop occupied only 69.3% of usable height at 1920×1080. Tests now require at least 85% road coverage along one usable dimension in landscape/square, or 83% in portrait where recovery visibility can limit zoom.
+- All three tracks tested at seven viewport sizes, including 375×812 and 320×568. Padded circuits stay inside HUD-safe bounds; projected car-body corners remain on screen immediately before recovery. Stationary camera checks still pass.
+- `npm run check` passed all 21 Rust tests, formatting, native/WASM Clippy and JavaScript syntax. After the recovery refinement, both camera tests and native/WASM Clippy passed again. Release build passed.
+- Final targeted browser tests: Chromium 3/3 and Firefox headed under Xvfb 3/3 passed, including renderer stability, reset, switching, and desktop/narrow captures. A trial using headed Chromium reported resource-404 console errors; the documented headless Chromium configuration passed.
+- Desktop/narrow screenshots inspected in both browsers. An independent reviewer using the inherited model found the initial narrow-screen runoff clipping; the full-viewport constraint and regression checks resolve that finding.
+
 ## Whole-track camera — October 21, 2026
 
 - `npm run check`: passed formatting, native/WASM Clippy, JavaScript syntax checks, and all 21 Rust tests. Camera tests cover all three padded circuits at five viewport sizes and unchanged framing during vehicle motion/reset.

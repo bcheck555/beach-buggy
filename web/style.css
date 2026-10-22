@@ -31,7 +31,7 @@ body[data-reduced-motion=true] .finish-celebration{display:none}
 @media(max-height:780px){.garage{max-height:calc(87vh - 30px)}.setup-options{margin-bottom:12px}.setup-options summary{padding:9px 0}}
 @media(max-width:950px){#race-announcement{right:25px;top:200px;font-size:9px}.player-badge small{display:none}}
 @media(max-width:650px){.garage{max-height:none}.tracks{top:824px}footer{top:974px}body[data-state=menu]{min-height:1010px}.player-badge{bottom:28px}.player-badge strong{font-size:10px}#race-announcement{top:185px}}
-/* Keep the circuit clear inside the camera's 210px/30vh and 160px/24vh bands. */
+/* Keep the circuit clear inside the camera's 180px/30vh and 120px/24vh bands. */
 body[data-camera-view=whole-track] .race-top{top:min(98px,calc(30vh - 78px))}
 body[data-camera-view=whole-track] .race-metrics{padding:8px 12px;gap:15px}
 body[data-camera-view=whole-track] .race-metrics strong{font-size:24px;margin-top:3px}
