@@ -1,6 +1,6 @@
 # Beach Buggy · Coast Club
 
-A top-down 3D island racer written in Rust and compiled to WebAssembly. Three tracks, four cars, three physics presets, five AI rivals, solo time trials, and synthesized sound. Everything is unlocked. Beach Loop is the coastal showcase, with sculpted shores, shallow water, beach landmarks, and a marked jump; all tracks share the closer camera, visible player marker, and reactive driving effects.
+A top-down 3D island racer written in Rust and compiled to WebAssembly. Three tracks, four cars, three physics presets, five AI rivals, solo time trials, and synthesized sound. Everything is unlocked. Beach Loop is the coastal showcase, with sculpted shores, shallow water, beach landmarks, and a marked jump; all tracks offer following and whole-track cameras, a visible player marker, and reactive driving effects.
 
 ## Run locally
 
@@ -47,6 +47,8 @@ Use mouse or keyboard Tab/Enter for garage and pause menus. Connect a standard-m
 
 **High / Low quality** controls decorative detail and effect budgets without changing physics. **Reduced motion** follows the system preference on first use, can be overridden, and removes camera shake, speed-driven zoom, and celebratory motion. Quality and reduced motion apply immediately. All settings persist when browser storage is available.
 
+**Camera view** in garage setup and pause offers **Follow car** (default) or **Whole track**. Whole track keeps the entire circuit in a fixed, slightly angled overhead view, without panning, shake, or speed-driven zoom. It fits the window around the HUD and hides the redundant minimap. Cars appear smaller, especially in narrow windows; your halo still identifies your car. Switching applies immediately without an animated transition, persists when storage is available, and works independently of Reduced motion.
+
 Best completed laps are saved by track/car/physics combination in the browser's local storage and shared across both modes. Settings persist too. No account or server is required; private mode or blocked storage still permits play without saving. Clearing site data clears records.
 
 Results highlight a new personal best and the improvement over the record held when the race started. Existing records remain compatible: the showcase update preserves the drivable layout, checkpoints, vehicle handling, and record keys.
@@ -69,7 +71,7 @@ xvfb-run -a npm run test:firefox -- --headed
 
 Firefox's headless WebGL support depends on the host drivers; Xvfb provides the display used in validation. On hosts without an audio output device, the Firefox test verifies graph initialization and graceful operation rather than audible output. Chromium tests require a running audio context. Browser tests emulate a standard controller; physical controller hardware still benefits from a local check.
 
-The 19 Rust tests cover all **36 track/car/preset combinations**, **108 complete six-car grids** across rival difficulties, 27 stationary-start avoidance configurations, blocked passing, side-by-side racing, difficulty/handling isolation, feedback/reset state, ordered and directional checkpoints, out-of-bounds gate rejection, lap/finish/standings rules, record keys, acceleration, steering profiles, braking/reverse, tire slip/handbrake, suspension launch/landing, collision momentum, and render-rate independence. The 10 browser tests per browser cover garage persistence, legacy saves, quality/reduced-motion settings, keyboard/gamepad input, disconnect fallback, sound initialization, pause/reset/restart, complete races and trials, storage errors, and 1080p captures. Isolated presentation tests inject telemetry to check lap/landing/PB messages and audio gains; actual race completion uses the simulation.
+The 21 Rust tests cover all **36 track/car/preset combinations**, **108 complete six-car grids** across rival difficulties, 27 stationary-start avoidance configurations, blocked passing, side-by-side racing, difficulty/handling isolation, feedback/reset state, ordered and directional checkpoints, out-of-bounds gate rejection, lap/finish/standings rules, record keys, acceleration, steering profiles, braking/reverse, tire slip/handbrake, suspension launch/landing, collision momentum, render-rate independence, and stationary camera framing across tracks and aspect ratios. The 16 browser tests per browser cover garage persistence, legacy saves, quality/reduced-motion/camera settings, keyboard/gamepad input, disconnect fallback, sound initialization, pause/reset/restart, complete races and trials, storage errors, whole-track captures at desktop/narrow sizes, and 1080p captures. Isolated presentation tests inject telemetry to check lap/landing/PB messages, camera controls, and audio gains; actual race completion uses the simulation.
 
 `?autodrive=1` enables an accelerated demo driver for browser race-completion tests. It drives through the same simulation and checkpoints and **never saves personal records**. It is intentionally absent from the regular UI.
 
@@ -78,7 +80,7 @@ Playwright writes screenshots, traces, and render samples under `test-results/`.
 ## Code layout
 
 - `src/sim.rs`: Dependency-free simulation logic, vehicle/track data, AI, collisions, checkpoints, race timing, and tests. Fixed 60 Hz stepping with accumulated render time.
-- `src/main.rs`, `src/render.rs`: Macroquad game loop, interpolated positions/headings/heights, fixed-angle following camera with bounded look-ahead, cached scenery/car geometry, reusable mesh buffers, batched effects, and minimap. Particle budgets are 384 on High and 160 on Low.
+- `src/main.rs`, `src/render.rs`, `src/camera.rs`: Macroquad game loop, interpolated positions/headings/heights, following camera with bounded look-ahead, cached whole-track framing, cached scenery/car geometry, reusable mesh buffers, batched effects, and minimap. Particle budgets are 384 on High and 160 on Low.
 - `src/bridge.rs`, `web/bridge.js`: Typed numeric WASM imports for controller input, browser audio, telemetry, and storage. HTML/CSS provide accessible garage, HUD, and pause/results controls.
 - `scripts/`: Toolchain setup, locked release build, local static server, and verification.
 

@@ -20,7 +20,7 @@
   if (!settings || typeof settings !== 'object') settings = {};
   const bounded = (value,max,fallback=0) => Number.isInteger(value) && value >= 0 && value <= max ? value : fallback;
   const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
-  const options = [bounded(settings.track,2), bounded(settings.car,3), bounded(settings.physics,2), bounded(settings.mode,1), 0, new URLSearchParams(location.search).get('autodrive') === '1' ? 1 : 0, bounded(settings.difficulty,2,1), bounded(settings.quality,1,1), typeof settings.reducedMotion === 'boolean' ? Number(settings.reducedMotion) : Number(prefersReducedMotion)];
+  const options = [bounded(settings.track,2), bounded(settings.car,3), bounded(settings.physics,2), bounded(settings.mode,1), 0, new URLSearchParams(location.search).get('autodrive') === '1' ? 1 : 0, bounded(settings.difficulty,2,1), bounded(settings.quality,1,1), typeof settings.reducedMotion === 'boolean' ? Number(settings.reducedMotion) : Number(prefersReducedMotion), bounded(settings.cameraView,1)];
   let volume = typeof settings.volume === 'number' && Number.isFinite(settings.volume) ? Math.max(0,Math.min(1,settings.volume)) : 0.55;
   let muted = settings.muted === true;
   let pending = 0, ready = false, currentState = -1, lastUI = 0, lastImpact = 0, lastLanding = 0;
@@ -28,7 +28,7 @@
   let announcementTimer;
   let padCache = null, padTime = -1;
   let latest = null;
-  const persist = () => storage.set('settings',JSON.stringify({track:options[0],car:options[1],physics:options[2],mode:options[3],difficulty:options[6],quality:options[7],reducedMotion:!!options[8],volume,muted}));
+  const persist = () => storage.set('settings',JSON.stringify({track:options[0],car:options[1],physics:options[2],mode:options[3],difficulty:options[6],quality:options[7],reducedMotion:!!options[8],cameraView:options[9],volume,muted}));
   const queue = command => { if (ready) pending = command; };
   function refresh() {
     const c = cars[options[1]];
@@ -42,6 +42,7 @@
     document.querySelectorAll('[data-option]').forEach(el=>{el.value=options[Number(el.dataset.option)];});
     document.querySelectorAll('[data-motion]').forEach(el=>{el.checked=!!options[8];});
     document.body.dataset.reducedMotion=String(!!options[8]);
+    document.body.dataset.cameraView=options[9]===1?'whole-track':'follow';
     $('difficulty').disabled=!!options[3]; $('pause-difficulty').disabled=!!options[3];
     $('setup-summary').textContent=`${options[3]?'Solo laps':['Easy','Normal','Hard'][options[6]]+' rivals'} · ${options[7]?'High':'Low'} detail`;
     $('player-car').textContent=c[0];

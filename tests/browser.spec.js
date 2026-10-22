@@ -118,7 +118,10 @@ test('legacy saves retain choices and records; new settings default safely',asyn
     localStorage.setItem('coast-v1:100','45.5');
   });
   const errors=await ready(page);
-  expect(await page.evaluate(()=>[6,7,8].map(i=>importObject.env.bb_option(i)))).toEqual([1,1,1]);
+  expect(await page.evaluate(()=>[6,7,8,9].map(i=>importObject.env.bb_option(i)))).toEqual([1,1,1,0]);
+  await expect(page.locator('#camera-view')).toHaveValue('0');
+  await expect(page.locator('#pause-camera-view')).toHaveValue('0');
+  await expect(page.locator('body')).toHaveAttribute('data-camera-view','follow');
   await expect(page.locator('body')).toHaveAttribute('data-reduced-motion','true');
   await expect(page.locator('#sound-toggle')).toHaveAttribute('aria-pressed','false');
   await start(page);await expect.poll(()=>page.evaluate(()=>coast.telemetry.best)).toBe(45.5);
@@ -140,6 +143,124 @@ async function telemetry(page,overrides={}) {
   await page.waitForTimeout(70);
   await page.evaluate(data=>importObject.env.bb_telemetry(...Object.values(data)),sample(overrides));
 }
+
+test('camera view defaults, switches immediately, synchronizes, and persists independently',async({page})=>{
+  const errors=await presentationReady(page);
+  await expect(page.locator('#camera-view')).toHaveValue('0');
+  await expect(page.locator('#pause-camera-view')).toHaveValue('0');
+  expect(await page.evaluate(()=>importObject.env.bb_option(9))).toBe(0);
+  await page.locator('.setup-options summary').click();
+  await page.setViewportSize({width:600,height:900});
+  const layout=await page.evaluate(()=>({garage:document.querySelector('.garage').getBoundingClientRect().bottom,tracks:document.querySelector('.tracks').getBoundingClientRect().top}));
+  expect(layout.tracks).toBeGreaterThanOrEqual(layout.garage);
+  await page.locator('#reduced-motion').check();
+  await page.locator('#camera-view').selectOption('1');
+  expect(await page.evaluate(()=>[8,9].map(i=>importObject.env.bb_option(i)))).toEqual([1,1]);
+  await expect(page.locator('body')).toHaveAttribute('data-camera-view','whole-track');
+  await expect(page.locator('#pause-camera-view')).toHaveValue('1');
+  await page.reload();await expect(page.locator('#start')).toBeEnabled();
+  await expect(page.locator('#camera-view')).toHaveValue('1');
+  await expect(page.locator('#pause-camera-view')).toHaveValue('1');
+  await expect(page.locator('body')).toHaveAttribute('data-camera-view','whole-track');
+  await telemetry(page,{state:2});
+  await page.locator('#pause-reduced-motion').uncheck();
+  expect(await page.evaluate(()=>[8,9].map(i=>importObject.env.bb_option(i)))).toEqual([0,1]);
+  await page.locator('#pause-camera-view').selectOption('0');
+  expect(await page.evaluate(()=>[8,9].map(i=>importObject.env.bb_option(i)))).toEqual([0,0]);
+  await expect(page.locator('#camera-view')).toHaveValue('0');
+  await expect(page.locator('body')).toHaveAttribute('data-camera-view','follow');
+  expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('coast-v1:settings')))).toMatchObject({cameraView:0,reducedMotion:false});
+  await page.reload();await expect(page.locator('#start')).toBeEnabled();
+  await expect(page.locator('#camera-view')).toHaveValue('0');
+  expect(errors).toEqual([]);
+});
+
+test('invalid camera preferences fall back to Follow car',async({page})=>{
+  const errors=await presentationReady(page);
+  for(const cameraView of [-1,2,0.5,'1',true,null]) {
+    await page.evaluate(cameraView=>localStorage.setItem('coast-v1:settings',JSON.stringify({cameraView})),cameraView);
+    await page.reload();await expect(page.locator('#start')).toBeEnabled();
+    await expect(page.locator('#camera-view')).toHaveValue('0');
+    await expect(page.locator('#pause-camera-view')).toHaveValue('0');
+    await expect(page.locator('body')).toHaveAttribute('data-camera-view','follow');
+    expect(await page.evaluate(()=>importObject.env.bb_option(9))).toBe(0);
+    expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('coast-v1:settings')).cameraView)).toBe(0);
+  }
+  expect(errors).toEqual([]);
+});
+
+test('camera controls work when storage is unavailable',async({page})=>{
+  await page.addInitScript(()=>{
+    Object.defineProperty(Storage.prototype,'getItem',{value(){throw new Error('Blocked');}});
+    Object.defineProperty(Storage.prototype,'setItem',{value(){throw new Error('Blocked');}});
+  });
+  const errors=await presentationReady(page);
+  await expect(page.locator('#camera-view')).toHaveValue('0');
+  await page.locator('.setup-options summary').click();
+  await page.locator('#camera-view').selectOption('1');
+  expect(await page.evaluate(()=>importObject.env.bb_option(9))).toBe(1);
+  await expect(page.locator('#pause-camera-view')).toHaveValue('1');
+  await telemetry(page,{state:2});
+  await page.locator('#pause-camera-view').selectOption('0');
+  expect(await page.evaluate(()=>importObject.env.bb_option(9))).toBe(0);
+  await expect(page.locator('#camera-view')).toHaveValue('0');
+  expect(errors).toEqual([]);
+});
+
+for(const track of [0,1,2])test(`whole-track framing for track ${track} at desktop and narrow sizes`,async({page},info)=>{
+  await page.addInitScript(()=>{
+    const locations=new WeakMap();
+    const prototype=WebGLRenderingContext.prototype;
+    const getLocation=prototype.getUniformLocation,upload=prototype.uniformMatrix4fv;
+    prototype.getUniformLocation=function(program,name) {
+      const location=getLocation.call(this,program,name);
+      if(location)locations.set(location,name);
+      return location;
+    };
+    prototype.uniformMatrix4fv=function(location,transpose,value) {
+      // Macroquad combines the 3D view and projection. Exclude flat HUD uploads.
+      if(location&&locations.get(location)==='Projection'&&Math.abs(value[6])>1e-6) {
+        window.raceProjection=Array.from(value);
+        window.raceProjectionUpdates=(window.raceProjectionUpdates||0)+1;
+      }
+      return upload.call(this,location,transpose,value);
+    };
+  });
+  const errors=await ready(page,'/?autodrive=1');
+  await page.locator(`[data-track="${track}"]`).click();
+  await page.locator('.setup-options summary').click();
+  await page.locator('#camera-view').selectOption('1');
+  await start(page);
+  await expect.poll(()=>page.evaluate(()=>coast.telemetry.countdown)).toBeLessThanOrEqual(0);
+  await expect.poll(()=>page.evaluate(()=>window.raceProjectionUpdates||0)).toBeGreaterThan(2);
+  const fixed=await page.evaluate(()=>window.raceProjection);
+  const elapsed=await page.evaluate(()=>coast.telemetry.elapsed);
+  await expect.poll(()=>page.evaluate(()=>coast.telemetry.elapsed)).toBeGreaterThan(elapsed+0.2);
+  expect(await page.evaluate(()=>window.raceProjection)).toEqual(fixed);
+  const updates=await page.evaluate(()=>window.raceProjectionUpdates);
+  await page.keyboard.press('r');
+  await expect.poll(()=>page.evaluate(()=>window.raceProjectionUpdates)).toBeGreaterThan(updates+2);
+  expect(await page.evaluate(()=>window.raceProjection)).toEqual(fixed);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('body')).toHaveAttribute('data-state','pause');
+  await page.locator('#pause-camera-view').selectOption('0');
+  await page.locator('#resume').click();
+  await expect(page.locator('body')).toHaveAttribute('data-state','race');
+  await expect.poll(()=>page.evaluate(()=>window.raceProjection)).not.toEqual(fixed);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('body')).toHaveAttribute('data-state','pause');
+  await page.locator('#pause-camera-view').selectOption('1');
+  await page.locator('#resume').click();
+  await expect(page.locator('body')).toHaveAttribute('data-state','race');
+  await expect.poll(()=>page.evaluate(()=>window.raceProjection)).toEqual(fixed);
+  await expect(page.locator('body')).toHaveAttribute('data-camera-view','whole-track');
+  for(const [name,width,height] of [['desktop',1440,900],['narrow',600,900]]) {
+    await page.setViewportSize({width,height});
+    await page.waitForTimeout(200);
+    await page.screenshot({path:info.outputPath(`whole-track-${track}-${name}.png`)});
+  }
+  expect(errors).toEqual([]);
+});
 
 test('lap cues, landing status, record improvement, and reduced-motion finish',async({page})=>{
   const errors=await presentationReady(page);

@@ -1,5 +1,6 @@
 mod bridge;
 mod render;
+use beach_buggy::camera::TrackCamera;
 use beach_buggy::sim::*;
 use macroquad::prelude::*;
 
@@ -40,6 +41,8 @@ async fn main() {
     let mut camera = vec3(0., 0., 0.);
     let mut look_ahead = V2::default();
     let mut camera_extent = 54.;
+    let mut track_camera = TrackCamera::new(&race.track, screen_width(), screen_height());
+    let mut was_whole_track = false;
     let mut previous_pause = false;
     let mut previous_reset = false;
     let mut previous_count = 4;
@@ -161,58 +164,71 @@ async fn main() {
         let player = &race.cars[0];
         let alpha = (race.accumulator / DT).clamp(0., 1.);
         let car_pos = player.previous.lerp(player.pos, alpha);
-        let desired_look = player.vel * 0.45;
-        let desired_look = desired_look * (10. / desired_look.len().max(10.));
-        look_ahead = look_ahead.lerp(desired_look, 1. - (-dt * 3.5).exp());
-        let target = if state == 0 {
-            vec3(5., 0., -5.)
-        } else {
-            vec3(
-                car_pos.x + look_ahead.x,
-                player.height * 0.35,
-                car_pos.y + look_ahead.y,
-            )
-        };
-        // An automatic checkpoint recovery can move farther than the camera's view.
-        if state != 0 && camera.distance(target) > 32. {
+        let whole_track = state != 0 && bridge::option(9) > 0.5;
+        if was_whole_track && !whole_track {
             camera = vec3(car_pos.x, player.height * 0.35, car_pos.y);
             look_ahead = V2::default();
+            camera_extent = 54.;
+        }
+        was_whole_track = whole_track;
+        if !whole_track {
+            let desired_look = player.vel * 0.45;
+            let desired_look = desired_look * (10. / desired_look.len().max(10.));
+            look_ahead = look_ahead.lerp(desired_look, 1. - (-dt * 3.5).exp());
+            let target = if state == 0 {
+                vec3(5., 0., -5.)
+            } else {
+                vec3(
+                    car_pos.x + look_ahead.x,
+                    player.height * 0.35,
+                    car_pos.y + look_ahead.y,
+                )
+            };
+            // An automatic checkpoint recovery can move farther than the camera's view.
+            if state != 0 && camera.distance(target) > 32. {
+                camera = vec3(car_pos.x, player.height * 0.35, car_pos.y);
+                look_ahead = V2::default();
+            } else {
+                camera = camera.lerp(target, 1. - (-dt * 6.5).exp());
+            }
+            let overview = state == 0;
+            let desired_extent = if reduced_motion {
+                54.
+            } else {
+                54. + (player.vel.len() * 0.15).min(5.)
+            };
+            camera_extent += (desired_extent - camera_extent) * (1. - (-dt * 2.).exp());
+            let response = if state == 1 && !reduced_motion {
+                (player.impact * 0.12 + player.landing * 0.3).min(0.35)
+            } else {
+                0.
+            };
+            let camera_focus = camera
+                + vec3(
+                    (race.elapsed * 43.).sin() * response,
+                    (race.elapsed * 37.).cos() * response * 0.6,
+                    0.,
+                );
+            set_camera(&Camera3D {
+                position: camera_focus
+                    + if overview {
+                        vec3(80., 155., 160.)
+                    } else {
+                        vec3(0., 60., 43.)
+                    },
+                target: camera_focus,
+                up: vec3(0., 1., 0.),
+                fovy: if overview { 235. } else { camera_extent },
+                projection: Projection::Orthographics,
+                z_near: 0.1,
+                z_far: 1500.,
+                ..Default::default()
+            });
         } else {
-            camera = camera.lerp(target, 1. - (-dt * 6.5).exp());
+            track_camera.update(&race.track, screen_width(), screen_height());
+            set_camera(&track_camera.camera());
         }
         let overview = state == 0;
-        let desired_extent = if reduced_motion {
-            54.
-        } else {
-            54. + (player.vel.len() * 0.15).min(5.)
-        };
-        camera_extent += (desired_extent - camera_extent) * (1. - (-dt * 2.).exp());
-        let response = if state == 1 && !reduced_motion {
-            (player.impact * 0.12 + player.landing * 0.3).min(0.35)
-        } else {
-            0.
-        };
-        let camera_focus = camera
-            + vec3(
-                (race.elapsed * 43.).sin() * response,
-                (race.elapsed * 37.).cos() * response * 0.6,
-                0.,
-            );
-        set_camera(&Camera3D {
-            position: camera_focus
-                + if overview {
-                    vec3(80., 155., 160.)
-                } else {
-                    vec3(0., 60., 43.)
-                },
-            target: camera_focus,
-            up: vec3(0., 1., 0.),
-            fovy: if overview { 235. } else { camera_extent },
-            projection: Projection::Orthographics,
-            z_near: 0.1,
-            z_far: 1500.,
-            ..Default::default()
-        });
         scenery.draw(get_time() as f32, high_quality);
         effects.draw();
         for (i, car) in race.cars.iter().enumerate() {
@@ -226,7 +242,7 @@ async fn main() {
             );
         }
         set_default_camera();
-        if !overview {
+        if !overview && !whole_track {
             render::minimap(&race);
         }
         bridge::telemetry(bridge::Telemetry {

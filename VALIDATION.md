@@ -1,5 +1,17 @@
 # Validation — October 19, 2026
 
+## Whole-track camera — October 21, 2026
+
+- `npm run check`: passed formatting, native/WASM Clippy, JavaScript syntax checks, and all 21 Rust tests. Camera tests cover all three padded circuits at five viewport sizes and unchanged framing during vehicle motion/reset.
+- `npm run build`: passed; static release rebuilt with the camera option.
+- Chromium: full 16-test suite passed; all six camera regressions passed again after final mobile layout and renderer assertions.
+- Firefox: full 16-test suite passed headed under Xvfb. Headless Firefox run was stopped after failing to initialize the game; headed execution is the documented environment fallback.
+- Actual WASM/WebGL tests confirm the 3D projection stays identical while driving/resetting, changes in Follow car mode, and restores exactly in Whole track mode on all three tracks. Settings tests cover defaults, invalid/legacy values, synchronization, persistence, independent reduced motion, and blocked storage.
+- All three circuits were visually inspected in Chromium at 1440×900 and 600×900; Firefox desktop/narrow samples were also inspected. Full circuits and player halos remain visible without HUD overlap. Expanded mobile garage layout was checked at widths 320, 390, and 600px; a discovered overlap was fixed with document flow and covered by a regression assertion.
+- Two agents using the inherited session model handled browser settings/tests and independent review. Review findings (mobile overlap and missing renderer integration assertions) were resolved before committing.
+
+The earlier validation below describes the pre-camera release. Existing hardware-performance and physical-controller limitations still apply.
+
 Validated on Linux x86_64, Rust 1.90.0, Node.js 22.22.2, Playwright 1.56.1.
 
 | Check | Result |
