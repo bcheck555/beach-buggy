@@ -326,7 +326,7 @@ impl Track {
             } else if (5.0..6.0).contains(parameter) {
                 *height = 12.;
             }
-            // A modest ramp on the outer straight leaves room to land before the bend.
+            // A larger ramp on the outer straight leaves room to land before the bend.
             let offset = distance - jump_crest;
             let ramp = if (-25.0..0.0).contains(&offset) {
                 (offset + 25.) / 25.
@@ -335,7 +335,7 @@ impl Track {
             } else {
                 0.
             };
-            *height += 2.6 * ramp;
+            *height += 5.2 * ramp;
         }
         let mut track = Self {
             id: 2,
@@ -674,9 +674,11 @@ impl Car {
             let fraction = (-before / (after - before)).clamp(0., 1.);
             let crossing = self.previous.lerp(self.pos, fraction);
             let crossing_height = self.previous_height * (1. - fraction) + self.height * fraction;
+            let height_above_road = crossing_height - track.heights[self.next_cp * 16];
+            // Volcano's fourth gate spans the jump, including its larger airborne arc.
+            let height_limit = if self.next_cp == 4 { 6. } else { 3. };
             if (crossing - p).dot(t.normal()).abs() < track.width * 0.5 + 2.
-                && (track.id != 2
-                    || (crossing_height - track.heights[self.next_cp * 16]).abs() < 3.)
+                && (track.id != 2 || (height_above_road > -3. && height_above_road < height_limit))
             {
                 if self.next_cp == 0 {
                     self.laps += 1;
@@ -1058,7 +1060,8 @@ mod tests {
             let end = track.nearest(end).index;
             for (spec, profile) in CARS.iter().enumerate() {
                 for physics in 0..3 {
-                    let mut full_speed_peak = 0_f32;
+                    let mut full_speed_peak_sum = 0_f32;
+                    let mut full_speed_cases = 0;
                     // Full speed is the equilibrium of drive and drag, not the nominal top.
                     let mut low = 0.;
                     let mut high = profile.top;
@@ -1081,20 +1084,24 @@ mod tests {
                                 * (1. - (speed / profile.top).powi(2)));
                         for offset in [-6., -3., 0., 3., 6.] {
                             // Shift crest arrival within a physics step; suspension is phase-sensitive.
-                            for phase_step in 0..8 {
-                                let phase = speed * DT * phase_step as f32 / 8.;
+                            let phases = if name == "jump" { 16 } else { 8 };
+                            for phase_step in 0..phases {
+                                let phase = speed * DT * phase_step as f32 / phases as f32;
                                 let mut car = place(&track, start, spec);
                                 car.pos = car.pos
                                     + car.forward().normal() * offset
                                     + car.forward() * phase;
                                 car.previous = car.pos;
                                 car.vel = car.forward() * speed;
+                                if name == "jump" {
+                                    car.next_cp = 4;
+                                }
                                 let mut peak = 0_f32;
                                 let mut airborne = 0_f32;
                                 let mut longest = 0_f32;
                                 let mut distance = 0_f32;
                                 let mut exited = false;
-                                for _ in 0..1800 {
+                                for step in 0..1800 {
                                     let mut input = ai_input(&car, &track, physics);
                                     input.throttle = throttle;
                                     if name == "jump" {
@@ -1102,6 +1109,9 @@ mod tests {
                                     }
                                     let previous = car.pos;
                                     car.step(input, &track, physics);
+                                    if name == "jump" {
+                                        car.checkpoint_step(&track, (step + 1) as f32 * DT);
+                                    }
                                     let road = if name == "jump" {
                                         track.nearest(car.pos)
                                     } else {
@@ -1125,26 +1135,31 @@ mod tests {
                                 let limit = if name == "climb" {
                                     1.
                                 } else if fraction == 0. {
-                                    0.2
+                                    1.25
                                 } else {
-                                    3.
+                                    6.
                                 };
-                                assert!(peak <= limit && longest <= 1.25,
+                                assert!(peak <= limit && longest <= 1.5,
                                 "{name} car{spec} physics{physics} fraction{fraction} offset{offset} phase{phase}: peak={peak} air={longest}");
                                 if name == "jump" {
-                                    let runoff = if offset.abs() > 3. { 9. } else { 0. };
+                                    if offset.abs() <= 3. {
+                                        assert_eq!(car.next_cp, 5, "jump missed checkpoint car{spec} physics{physics} fraction{fraction} offset{offset} phase{phase}");
+                                    }
+                                    let runoff = if offset.abs() > 3. { 10. } else { 0. };
                                     assert!(distance < track.width * 0.5 + runoff, "jump left the road/runoff car{spec} physics{physics} offset{offset} phase{phase}");
                                     if fraction == 1. {
-                                        full_speed_peak = full_speed_peak.max(peak);
+                                        full_speed_peak_sum += peak;
+                                        full_speed_cases += 1;
                                     }
                                 }
                             }
                         }
                     }
                     if name == "jump" {
+                        let mean_peak = full_speed_peak_sum / full_speed_cases as f32;
                         assert!(
-                            full_speed_peak > 0.5,
-                            "car{spec} physics{physics} lost its jump"
+                            mean_peak > 1.5,
+                            "car{spec} physics{physics} jump too muted: mean peak={mean_peak}"
                         );
                     }
                 }
@@ -1223,6 +1238,28 @@ mod tests {
     #[test]
     fn volcano_gates_reset_and_reverse_preserve_route() {
         let track = Track::new(2);
+        for height in [-3., 6.] {
+            let mut car = place(&track, 64, 0);
+            car.next_cp = 4;
+            car.height += height;
+            car.previous_height = car.height;
+            cross(&mut car, &track, 4, true);
+            assert_eq!(car.next_cp, 4, "jump gate boundary {height}");
+        }
+        for cp in 0..8 {
+            let mut car = place(&track, cp * 16, 0);
+            car.next_cp = cp;
+            car.height += 5.5;
+            car.previous_height = car.height;
+            cross(&mut car, &track, cp, false);
+            assert_eq!(car.next_cp, cp, "airborne reverse checkpoint {cp}");
+            cross(&mut car, &track, cp, true);
+            assert_eq!(
+                car.next_cp,
+                if cp == 4 { 5 } else { cp },
+                "airborne checkpoint {cp}"
+            );
+        }
         for cp in 0..8 {
             let mut car = place(&track, cp * 16, 0);
             car.next_cp = cp;

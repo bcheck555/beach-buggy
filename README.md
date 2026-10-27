@@ -37,7 +37,7 @@ Use mouse or keyboard Tab/Enter for garage and pause menus. Connect a standard-m
 
 - **Beach Loop:** Wide sandy turns and a launch ramp; a good starting point.
 - **Rocky Coast:** Narrower elevated terrain, rock surfaces, and railings, with sculpted shores and rounded coastal rocks.
-- **Volcano Run:** The skill course: linked curves, two braking hairpins, a gradual outer climb, and an elevated crossing above a tunnel through a volcano. A modest jump sits on the long outer straight, with room to land before the next bend; airtime varies by car and speed. Brake before the marked corners; runoff gives room to recover. The volcano opens a cutaway while you drive beneath it so your car and halo stay visible in either camera view. Tunnel walls and elevated barriers remain active at both scenery settings. The crater and lava are scenery, without damage.
+- **Volcano Run:** The skill course: linked curves, two braking hairpins, a gradual outer climb, and an elevated crossing above a tunnel through a volcano. A larger jump sits on the long outer straight, with room to land before the next bend; airtime varies by car and speed. Brake before the marked corners; runoff gives room to recover. The volcano opens a cutaway while you drive beneath it so your car and halo stay visible in either camera view. Tunnel walls and elevated barriers remain active at both scenery settings. The crater and lava are scenery, without damage.
 
 **Sunrunner** balances grip and power. **Sand Flea** is light and responsive. **Riptide** accelerates hardest but needs careful throttle and braking. **Dune Hauler** is heavy, stable, and loses less traction off-road.
 
