@@ -313,6 +313,30 @@ impl Track {
             dense.push((p, interpolate(2).max(0.8), parameter));
         }
         let length = *cumulative.last().unwrap();
+        // Spread the bridge climb across the approach, easing onto the upper deck.
+        // The old localized rise after the bend could launch cars over the crossing.
+        let climb_start = cumulative[64];
+        let climb_end = cumulative[5 * 64];
+        let jump_crest = cumulative[11 * 64] - 5.;
+        for (i, (_, height, parameter)) in dense.iter_mut().enumerate() {
+            let distance = cumulative[i];
+            if (1.0..5.0).contains(parameter) {
+                let t = ((distance - climb_start) / (climb_end - climb_start)).clamp(0., 1.);
+                *height = 0.8 + 11.2 * t * t * (3. - 2. * t);
+            } else if (5.0..6.0).contains(parameter) {
+                *height = 12.;
+            }
+            // A modest ramp on the outer straight leaves room to land before the bend.
+            let offset = distance - jump_crest;
+            let ramp = if (-25.0..0.0).contains(&offset) {
+                (offset + 25.) / 25.
+            } else if (0.0..2.0).contains(&offset) {
+                1. - offset / 2.
+            } else {
+                0.
+            };
+            *height += 2.6 * ramp;
+        }
         let mut track = Self {
             id: 2,
             points: Vec::new(),
@@ -360,6 +384,8 @@ impl Track {
             height: 0.,
             grip: 1.,
         };
+        let mut local = best;
+        let route = route.filter(|_| self.id == 2);
         let mut best_score = f32::MAX;
         for i in 0..SAMPLES {
             let j = (i + 1) % SAMPLES;
@@ -368,27 +394,38 @@ impl Track {
             let p = self.points[i] + delta * t;
             let distance = (pos - p).len();
             let height = self.heights[i] * (1. - t) + self.heights[j] * t;
-            let score = if self.id == 2 {
-                if let Some((car_height, index)) = route {
-                    let separation = i.abs_diff(index);
-                    let steps = separation.min(SAMPLES - separation);
-                    distance + (height - car_height).abs() * 2. + if steps > 10 { 14. } else { 0. }
-                } else {
-                    distance
+            let candidate = || Road {
+                pos: p,
+                tangent: delta.unit(),
+                distance,
+                index: i,
+                height,
+                grip: if self.id == 1 { 0.92 } else { 1. },
+            };
+            let score = if let Some((car_height, index)) = route {
+                let separation = i.abs_diff(index);
+                let steps = separation.min(SAMPLES - separation);
+                // Adjacent segments share a surface: altitude must not snap an
+                // offset car uphill. First find the geometric nearest local road.
+                if steps <= 10 {
+                    if distance < local.distance {
+                        local = candidate();
+                    }
+                    continue;
                 }
+                distance + (height - car_height).abs() * 2. + 14.
             } else {
                 distance
             };
             if score < best_score {
                 best_score = score;
-                best = Road {
-                    pos: p,
-                    tangent: delta.unit(),
-                    distance,
-                    index: i,
-                    height,
-                    grip: if self.id == 1 { 0.92 } else { 1. },
-                };
+                best = candidate();
+            }
+        }
+        // Altitude still selects the right crossing level and recovers stale hints.
+        if let Some((height, _)) = route {
+            if local.distance + (local.height - height).abs() * 2. < best_score {
+                best = local;
             }
         }
         best
@@ -1009,6 +1046,156 @@ mod tests {
         let tangent = (track.points[(index + 1) % SAMPLES] - track.points[index]).unit();
         car.heading = tangent.y.atan2(tangent.x);
         car
+    }
+    #[test]
+    fn volcano_jump_approaches_are_controlled() {
+        let track = Track::new(2);
+        for (name, start, end) in [
+            ("climb", V2::new(55., -32.), V2::new(-25., 20.)),
+            ("jump", V2::new(-40., 95.), V2::new(45., 90.)),
+        ] {
+            let start = track.nearest(start).index;
+            let end = track.nearest(end).index;
+            for (spec, profile) in CARS.iter().enumerate() {
+                for physics in 0..3 {
+                    let mut full_speed_peak = 0_f32;
+                    // Full speed is the equilibrium of drive and drag, not the nominal top.
+                    let mut low = 0.;
+                    let mut high = profile.top;
+                    for _ in 0..40 {
+                        let speed = (low + high) * 0.5;
+                        let drive = profile.accel
+                            * preset(physics).power
+                            * (1. - (speed / profile.top).powi(2));
+                        if drive > speed * 0.14 + speed * speed * 0.002 {
+                            low = speed;
+                        } else {
+                            high = speed;
+                        }
+                    }
+                    for fraction in [0.0, 0.7, 1.0] {
+                        let speed = if fraction == 0. { 8. } else { low * fraction };
+                        let throttle = (speed * 0.14 + speed * speed * 0.002)
+                            / (profile.accel
+                                * preset(physics).power
+                                * (1. - (speed / profile.top).powi(2)));
+                        for offset in [-6., -3., 0., 3., 6.] {
+                            // Shift crest arrival within a physics step; suspension is phase-sensitive.
+                            for phase_step in 0..8 {
+                                let phase = speed * DT * phase_step as f32 / 8.;
+                                let mut car = place(&track, start, spec);
+                                car.pos = car.pos
+                                    + car.forward().normal() * offset
+                                    + car.forward() * phase;
+                                car.previous = car.pos;
+                                car.vel = car.forward() * speed;
+                                let mut peak = 0_f32;
+                                let mut airborne = 0_f32;
+                                let mut longest = 0_f32;
+                                let mut distance = 0_f32;
+                                let mut exited = false;
+                                for _ in 0..1800 {
+                                    let mut input = ai_input(&car, &track, physics);
+                                    input.throttle = throttle;
+                                    if name == "jump" {
+                                        input.brake = 0.;
+                                    }
+                                    let previous = car.pos;
+                                    car.step(input, &track, physics);
+                                    let road = if name == "jump" {
+                                        track.nearest(car.pos)
+                                    } else {
+                                        track.road_for(car.pos, car.height, car.road_index)
+                                    };
+                                    distance = distance.max(road.distance);
+                                    peak = peak.max(car.height - track.ground(road));
+                                    if car.grounded {
+                                        airborne = 0.;
+                                    } else {
+                                        airborne += DT;
+                                    }
+                                    longest = longest.max(airborne);
+                                    assert!((car.pos - previous).len() < 2., "reset on {name}");
+                                    if car.road_index >= end {
+                                        exited = true;
+                                        break;
+                                    }
+                                }
+                                assert!(exited && car.grounded, "{name} car{spec} physics{physics} speed{speed} offset{offset} failed to land/exit");
+                                let limit = if name == "climb" {
+                                    1.
+                                } else if fraction == 0. {
+                                    0.2
+                                } else {
+                                    3.
+                                };
+                                assert!(peak <= limit && longest <= 1.25,
+                                "{name} car{spec} physics{physics} fraction{fraction} offset{offset} phase{phase}: peak={peak} air={longest}");
+                                if name == "jump" {
+                                    let runoff = if offset.abs() > 3. { 9. } else { 0. };
+                                    assert!(distance < track.width * 0.5 + runoff, "jump left the road/runoff car{spec} physics{physics} offset{offset} phase{phase}");
+                                    if fraction == 1. {
+                                        full_speed_peak = full_speed_peak.max(peak);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if name == "jump" {
+                        assert!(
+                            full_speed_peak > 0.5,
+                            "car{spec} physics{physics} lost its jump"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn volcano_ramp_query_keeps_local_surface_and_recovers_crossing_level() {
+        let track = Track::new(2);
+        // This shoulder approach previously selected a higher segment behind the
+        // car, turning a downhill ramp into an enormous upward suspension impulse.
+        let pos = V2::new(-1.492, 102.308);
+        let nearest = track.nearest(pos);
+        for height in [1.5, 2.5, 4.] {
+            let road = track.road_for(pos, height, nearest.index);
+            assert_eq!(road.index, nearest.index);
+            assert!((road.height - nearest.height).abs() < 0.001);
+        }
+        // Stale route hints must still recover by altitude at the stacked crossing.
+        assert!(track.road_for(V2::default(), 12., 100).height > 10.);
+        assert!(track.road_for(V2::default(), 0.8, 35).height < 2.);
+    }
+    #[test]
+    fn volcano_first_bend_has_a_gentle_bridge_approach() {
+        let track = Track::new(2);
+        let start = track.nearest(V2::new(65., -83.)).index;
+        let end = track.nearest(V2::new(-25., 20.)).index;
+        for spec in 0..CARS.len() {
+            for physics in 0..3 {
+                for offset in [-3., 0., 3.] {
+                    let mut car = place(&track, start, spec);
+                    car.pos = car.pos + car.forward().normal() * offset;
+                    let mut exited = false;
+                    for _ in 0..1800 {
+                        let previous = car.pos;
+                        car.step(ai_input(&car, &track, physics), &track, physics);
+                        let road = track.road_for(car.pos, car.height, car.road_index);
+                        assert!(
+                            car.height - track.ground(road) < 0.5,
+                            "bridge approach launched car{spec} physics{physics}"
+                        );
+                        assert!((car.pos - previous).len() < 2., "bridge approach reset");
+                        if car.road_index >= end {
+                            exited = true;
+                            break;
+                        }
+                    }
+                    assert!(exited, "bridge approach failed car{spec} physics{physics}");
+                }
+            }
+        }
     }
     #[test]
     fn volcano_crossing_keeps_levels_and_collisions_separate() {

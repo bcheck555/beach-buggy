@@ -506,6 +506,20 @@ test('volcano crossing and tunnel render in both cameras and detail levels',asyn
   for(const section of ['elevated','tunnel']) {
     if(section==='tunnel') {
       await page.waitForFunction(()=>{
+        const t=coast.telemetry;
+        if(t?.state!==1||t.worldZ<90||t.worldX< -8||t.worldX>2)return false;
+        document.querySelector('#pause').click();
+        return true;
+      },undefined,{timeout:90000,polling:'raf'});
+      await expect(page.locator('body')).toHaveAttribute('data-state','pause');
+      expect(await page.evaluate(()=>coast.telemetry.height)).toBeGreaterThan(1);
+      for(const camera of ['0','1'])for(const quality of ['0','1']) {
+        await page.locator('#pause-camera-view').selectOption(camera);
+        await page.locator('#pause-quality').selectOption(quality);
+        await page.screenshot({path:info.outputPath(`volcano-jump-${camera==='1'?'whole':'follow'}-${quality==='1'?'high':'low'}.png`),style:'#modal{visibility:hidden}'});
+      }
+      await page.locator('#resume').click();
+      await page.waitForFunction(()=>{
         if(coast.telemetry?.state!==1||coast.telemetry.tunnel!==1)return false;
         document.querySelector('#pause').click();
         return true;
