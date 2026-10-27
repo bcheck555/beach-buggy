@@ -431,8 +431,11 @@ impl Track {
         best
     }
     pub fn ground(&self, road: Road) -> f32 {
-        let shoulder = ((road.distance - self.width * 0.5) / 9.).clamp(0., 1.);
-        road.height * (1. - shoulder)
+        self.ground_at_distance(road.height, road.distance)
+    }
+    fn ground_at_distance(&self, height: f32, distance: f32) -> f32 {
+        let shoulder = ((distance - self.width * 0.5) / 9.).clamp(0., 1.);
+        height * (1. - shoulder)
     }
     pub fn checkpoint(&self, cp: usize) -> (V2, V2) {
         let i = cp * 16 % SAMPLES;
@@ -674,11 +677,24 @@ impl Car {
             let fraction = (-before / (after - before)).clamp(0., 1.);
             let crossing = self.previous.lerp(self.pos, fraction);
             let crossing_height = self.previous_height * (1. - fraction) + self.height * fraction;
-            let height_above_road = crossing_height - track.heights[self.next_cp * 16];
+            let lateral = (crossing - p).dot(t.normal()).abs();
+            let index = self.next_cp * 16;
+            let height = track.heights[index];
+            // Runoff is a valid recovery line, including wide jump landings. Keep
+            // the narrow gates and height separation at the bridge and tunnel.
+            let runoff = track.id == 2 && !track.section(index).barrier;
+            let gate_width = track.width * 0.5 + if runoff { 10. } else { 2. };
+            let minimum_height = if runoff {
+                track.ground_at_distance(height, lateral)
+            } else {
+                height
+            } - 3.;
             // Volcano's fourth gate spans the jump, including its larger airborne arc.
             let height_limit = if self.next_cp == 4 { 6. } else { 3. };
-            if (crossing - p).dot(t.normal()).abs() < track.width * 0.5 + 2.
-                && (track.id != 2 || (height_above_road > -3. && height_above_road < height_limit))
+            if lateral < gate_width
+                && (track.id != 2
+                    || (crossing_height > minimum_height
+                        && crossing_height < height + height_limit))
             {
                 if self.next_cp == 0 {
                     self.laps += 1;
@@ -1048,6 +1064,88 @@ mod tests {
         let tangent = (track.points[(index + 1) % SAMPLES] - track.points[index]).unit();
         car.heading = tangent.y.atan2(tangent.x);
         car
+    }
+    #[test]
+    fn volcano_runoff_counts_without_opening_crossing_gates() {
+        let track = Track::new(2);
+        for cp in 0..8 {
+            let index = cp * 16;
+            let (p, tangent) = track.checkpoint(cp);
+            let barrier = track.section(index).barrier;
+            for offset in [-17.4_f32, -12., 12., 17.4, 17.6] {
+                let pos = p + tangent.normal() * offset;
+                let road = track.road_for(pos, track.heights[index], index);
+                let height = if barrier {
+                    track.heights[index]
+                } else {
+                    track.ground(road)
+                };
+                for reverse in [true, false] {
+                    for wrong_level in [false, true] {
+                        let mut car = place(&track, index, 0);
+                        car.next_cp = cp;
+                        car.height = height + if wrong_level { 10. } else { 0. };
+                        car.previous_height = car.height;
+                        let direction = if reverse { -1. } else { 1. };
+                        car.previous = pos - tangent * direction;
+                        car.pos = pos + tangent * direction;
+                        car.checkpoint_step(&track, 100.);
+                        let accepted = !barrier && offset.abs() < 17.5 && !reverse && !wrong_level;
+                        assert_eq!(car.next_cp, if accepted { (cp + 1) % 8 } else { cp },
+                            "checkpoint{cp} offset{offset} reverse{reverse} wrong_level{wrong_level}");
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn wide_volcano_final_lap_finishes_quick_race() {
+        let mut finished_last = false;
+        for physics in 0..3 {
+            for lane in [-10., 10.] {
+                // Riptide, Quick Race, Hard: two clean laps, then a wide jump line.
+                let mut race = Race::with_difficulty(2, 2, physics, false, 2);
+                race.countdown = 0.;
+                let (finish, tangent) = race.track.checkpoint(0);
+                let mut finish_passes = 0;
+                for _ in 0..60 * 480 {
+                    let player = &race.cars[0];
+                    let wide = player.laps >= 2 && (52..76).contains(&player.road_index);
+                    let input = ai_drive(
+                        player,
+                        &race.track,
+                        physics,
+                        1,
+                        if wide { lane } else { 0. },
+                        f32::INFINITY,
+                    );
+                    let before = (player.pos - finish).dot(tangent);
+                    let previous = player.pos;
+                    race.tick(input);
+                    let player = &race.cars[0];
+                    assert!((player.pos - previous).len() < 2., "unexpected reset");
+                    let near_finish = player.road_index.min(SAMPLES - player.road_index) < 4;
+                    if near_finish && before < 0. && (player.pos - finish).dot(tangent) >= 0. {
+                        finish_passes += 1;
+                    }
+                    if player.finished || finish_passes >= 4 {
+                        break;
+                    }
+                }
+                let player = &race.cars[0];
+                assert!(player.finished,
+                    "physics{physics} lane{lane}: finish passes={finish_passes}, laps={}, next_cp={}, position={}",
+                    player.laps, player.next_cp, race.position());
+                assert_eq!(player.laps, 3);
+                assert_eq!(finish_passes, 3, "exactly three full circuits");
+                assert!(player.finish_time > 0.);
+                finished_last |= race.position() == race.cars.len();
+            }
+        }
+        assert!(
+            finished_last,
+            "a last-place finisher must still end the race"
+        );
     }
     #[test]
     fn volcano_jump_approaches_are_controlled() {

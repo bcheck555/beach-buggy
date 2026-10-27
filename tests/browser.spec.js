@@ -111,6 +111,27 @@ for(const trial of [false,true])test(`${trial?'time trial':'AI race'} finishes w
   expect(errors).toEqual([]);
 });
 
+test('Riptide Quick Race demo finishes Volcano Run with Hard rivals and overhead camera',async({page},info)=>{
+  const errors=await ready(page,'/?autodrive=1');
+  await page.locator('[data-track="2"]').click();
+  await page.locator('#next-car').click();
+  await page.locator('#next-car').click();
+  await expect(page.locator('#car-name')).toHaveText('Riptide');
+  await page.locator('[data-physics="1"]').click();
+  await page.locator('#mode').selectOption('0');
+  await page.locator('.setup-options summary').click();
+  await page.locator('#difficulty').selectOption('2');
+  await page.locator('#camera-view').selectOption('1');
+  await start(page);
+  await expect(page.locator('body')).toHaveAttribute('data-state','results',{timeout:150000});
+  expect(await page.evaluate(()=>coast.telemetry.lap)).toBe(3);
+  expect(await page.evaluate(()=>coast.telemetry.finish)).toBeGreaterThan(0);
+  await expect(page.locator('#result-position')).toHaveText(/^[1-6] \/ 6$/);
+  await expect(page.locator('#result-time')).not.toHaveText('—');
+  await page.screenshot({path:info.outputPath('riptide-hard-results.png')});
+  expect(errors).toEqual([]);
+});
+
 test('legacy saves retain choices and records; new settings default safely',async({page})=>{
   await page.emulateMedia({reducedMotion:'reduce'});
   await page.addInitScript(()=>{
